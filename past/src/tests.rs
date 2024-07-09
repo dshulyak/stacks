@@ -109,22 +109,22 @@ impl Symbolizer for TestSymbolizer {
 }
 
 #[derive(Debug, Clone)]
-pub struct HashMapFrames(HashMap<i64, Vec<u64>>);
+pub struct HashMapFrames(HashMap<i32, Vec<u64>>);
 
 impl Frames for Arc<HashMapFrames> {
-    fn frames(&self, id: i64) -> Result<Vec<u64>> {
+    fn frames(&self, id: i32) -> Result<Vec<u64>> {
         self.0.get(&id).cloned().ok_or(anyhow::anyhow!("missing frames"))
     }
 }
 
 impl Frames for HashMapFrames {
-    fn frames(&self, id: i64) -> Result<Vec<u64>> {
+    fn frames(&self, id: i32) -> Result<Vec<u64>> {
         self.0.get(&id).cloned().ok_or(anyhow::anyhow!("missing frames"))
     }
 }
 
 fn resolved(frames: &HashMapFrames, symbolizer: &TestSymbolizer, addr: i32) -> Vec<String> {
-    let frames = match frames.frames(addr as i64) {
+    let frames = match frames.frames(addr) {
         Ok(frames) => frames,
         Err(_) => return vec![],
     };
@@ -194,7 +194,7 @@ impl ReferenceStateMachine for RefModel {
             .prop_flat_map(|group| group)
             .prop_map(|groups| groups.into_iter().collect::<Vec<_>>());
 
-        let frames = (1..10i64, 0..=16usize)
+        let frames = (1..10i32, 0..=16usize)
             .prop_flat_map(|(id, size)| {
                 prop::collection::vec(0..10u64, size).prop_map(move |frames| {
                     let mut map = HashMap::new();

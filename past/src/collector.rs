@@ -86,6 +86,9 @@ impl Collector {
     }
 
     pub(crate) fn collect(&mut self, event: Received) -> Result<()> {
+        // all integers are cast to a signed form because of the API provided by rust parquet lib
+        // arithmetic operations will be correctly performed on unsigned integers, configured in schema
+        // TODO maybe i should move cast closer to the schema definition
         match event {
             Received::Switch(event) => {
                 let command = match self.tgid_to_command.get(&event.tgid) {
@@ -101,8 +104,8 @@ impl Collector {
                     tgid: event.tgid as i32,
                     pid: event.tgid as i32,
                     command: command.clone(),
-                    ustack: event.ustack as i64,
-                    kstack: event.kstack as i64,
+                    ustack: event.ustack,
+                    kstack: event.kstack,
                 });
             }
             Received::PerfStack(event) => {
@@ -119,8 +122,8 @@ impl Collector {
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
                         command: command.clone(),
-                        ustack: event.ustack as i64,
-                        kstack: event.kstack as i64,
+                        ustack: event.ustack,
+                        kstack: event.kstack,
                     });
                 };
             }
@@ -173,7 +176,7 @@ impl Collector {
                     work_id: span.work_id as i64,
                     amount: span.amount as i64,
                     name: span.name.clone(),
-                    ustack: event.ustack as i64,
+                    ustack: event.ustack,
                 });
             }
             Received::TraceClose(event) => {
@@ -280,14 +283,14 @@ pub(crate) fn on_exit<W: Write + Send>(
 }
 
 pub(crate) trait Frames {
-    fn frames(&self, id: i64) -> Result<Vec<u64>>;
+    fn frames(&self, id: i32) -> Result<Vec<u64>>;
 }
 
 fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
     let mut addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
     let mut unique = HashSet::new();
-    let traces: HashMap<i64, Result<Vec<u64>>> = kstacks
+    let traces: HashMap<i32, Result<Vec<u64>>> = kstacks
         .into_iter()
         .filter(|&stack_id| stack_id > 0)
         .map(|stack_id| {
@@ -394,10 +397,10 @@ fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &m
 }
 
 fn to_symbols<'a>(
-    traces: &'a HashMap<i64, Result<Vec<u64>>>,
+    traces: &'a HashMap<i32, Result<Vec<u64>>>,
     addresses: &'a HashMap<(i32, u64), Bytes>,
     tgid: i32,
-    stack_id: i64,
+    stack_id: i32,
 ) -> Option<impl Iterator<Item = Bytes> + 'a> {
     stack_id.checked_sub(1).and_then(move |stack_id| {
         traces.get(&(stack_id + 1)).and_then(move |trace| {

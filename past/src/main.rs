@@ -152,14 +152,13 @@ fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::from_default_env()));
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global default subscriber");
-    
+
     let interrupt = Arc::new(AtomicBool::new(true));
     let interrupt_handler = interrupt.clone();
     ctrlc::set_handler(move || {
         interrupt_handler.store(false, Ordering::Relaxed);
     })?;
 
-    
     util::ensure_exists(&opt.dir)?;
 
     let uptime = util::parse_uptime()?;
@@ -271,7 +270,7 @@ fn main() -> Result<()> {
     // to be sure that target comm is discovered either from proc or if it was exec'ed
     let procs = scan_proc(comms)?;
     for proc in procs.iter() {
-        let mut maps = skel.maps_mut(); 
+        let mut maps = skel.maps_mut();
         maps.filter_tgid()
             .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
@@ -290,13 +289,13 @@ fn main() -> Result<()> {
         BlazesymSymbolizer::new(),
     )?;
     for proc in procs.iter() {
-        let fake_exec_event = past_types::process_exec_event{
+        let fake_exec_event = past_types::process_exec_event {
             timestamp: uptime.as_nanos() as u64,
             tgid: proc.tgid as u32,
             comm: *proc.comm,
-            ..Default::default()    
+            ..Default::default()
         };
-        program.on_event(Received::ProcessExec(&fake_exec_event))?; 
+        program.on_event(Received::ProcessExec(&fake_exec_event))?;
     }
     {
         let mut builder = RingBufferBuilder::new();
@@ -328,8 +327,8 @@ fn main() -> Result<()> {
 struct MapFrames<'a>(&'a libbpf_rs::Map);
 
 impl Frames for MapFrames<'_> {
-    fn frames(&self, id: i64) -> Result<Vec<u64>> {
-        let id = (id as u32).to_ne_bytes();
+    fn frames(&self, id: i32) -> Result<Vec<u64>> {
+        let id = id.to_ne_bytes();
         let rst: Option<Vec<u8>> = self.0.lookup(&id, MapFlags::empty())?;
         let rst = rst.map(|frames| {
             let frames: &[u64] = bytemuck::cast_slice(&frames);

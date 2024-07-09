@@ -46,20 +46,20 @@ impl From<EventKind> for ByteArray {
     }
 }
 
-fn stack_schema() -> types::Type {
+fn events_schema() -> types::Type {
     parse_message_type(
         "
     message Stack {
-        required int64 timestamp;
-        required int64 duration;
+        required int64 timestamp (INTEGER(64, false));
+        required int64 duration (INTEGER(64, false));
         required binary kind (UTF8);
-        required int32 cpu;
-        required int32 tgid;
-        required int32 pid;
-        required int64 span_id;
-        required int64 parent_id;
-        required int64 work_id;
-        required int64 amount;
+        required int32 cpu (INTEGER(16, false));
+        required int32 tgid (INTEGER(32, false));
+        required int32 pid (INTEGER(32, false));
+        required int64 span_id (INTEGER(64, false));
+        required int64 parent_id (INTEGER(64, false));
+        required int64 work_id (INTEGER(64, false));
+        required int64 amount (INTEGER(64, false));
         required binary command (UTF8);
         required binary trace_name (UTF8);
         repeated binary ustack (UTF8);
@@ -79,8 +79,8 @@ pub enum Event {
         tgid: i32,
         pid: i32,
         command: Bytes,
-        ustack: i64,
-        kstack: i64,
+        ustack: i32,
+        kstack: i32,
     },
     CPUStack {
         ts: i64,
@@ -88,8 +88,8 @@ pub enum Event {
         tgid: i32,
         pid: i32,
         command: Bytes,
-        ustack: i64,
-        kstack: i64,
+        ustack: i32,
+        kstack: i32,
     },
     TraceExit {
         ts: i64,
@@ -103,7 +103,7 @@ pub enum Event {
         amount: i64,
         name: Bytes,
         command: Bytes,
-        ustack: i64,
+        ustack: i32,
     },
     TraceClose {
         ts: i64,
@@ -142,8 +142,8 @@ pub struct Group {
     ustack: RepeatedStack,
     kstack: RepeatedStack,
 
-    unresolved_ustack: Vec<i64>,
-    unresolved_kstack: Vec<i64>,
+    unresolved_ustack: Vec<i32>,
+    unresolved_kstack: Vec<i32>,
 }
 
 impl Group {
@@ -352,13 +352,13 @@ impl Group {
         self.trace_name.push(Bytes::new().into());
     }
 
-    pub(crate) fn unresolved_ustacks(&self) -> impl Iterator<Item = (i32, i64)> + '_ {
+    pub(crate) fn unresolved_ustacks(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         let resolved = self.tgid.len() - self.unresolved_ustack.len();
         let tgid = self.tgid[resolved..].iter().copied();
         tgid.zip(self.unresolved_ustack.iter().copied())
     }
 
-    pub(crate) fn unresolved_kstacks(&self) -> impl Iterator<Item = i64> + '_ {
+    pub(crate) fn unresolved_kstacks(&self) -> impl Iterator<Item = i32> + '_ {
         self.unresolved_kstack.iter().copied()
     }
 
@@ -399,7 +399,7 @@ pub struct GroupWriter<W: Write + Send>(SerializedFileWriter<W>);
 
 impl<W: Write + Send> GroupWriter<W> {
     pub(crate) fn with_compression(writer: W, compression: Compression) -> Result<Self> {
-        let schema = Arc::new(stack_schema());
+        let schema = Arc::new(events_schema());
         let properties = Arc::new(
             WriterProperties::builder()
                 .set_compression(compression)
