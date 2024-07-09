@@ -1,0 +1,57 @@
+name: release
+run-name: release ${{ github.ref_name }}
+
+on:
+  push:
+    tags:
+      - '*'
+
+permissions:
+  contents: write
+
+jobs:
+    test:
+        uses: ./.github/workflows/test.yml
+        secrets: inherit
+    build:
+        uses: ./.github/workflows/build.yml
+        secrets: inherit
+    release:
+        runs-on: ubuntu-22.04
+        needs: [build, test]
+        steps:
+            - 
+                name: Download the artifacts
+                uses: actions/download-artifact@v4
+            - 
+                name: Create Release
+                uses: actions/create-release@v1
+                id: create_release
+                env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                with:
+                    tag_name:  ${{ github.ref_name }}
+                    release_name: Release ${{ github.ref_name }} 
+                    draft: false
+                    prerelease: true
+            - 
+                name: upload past x86_64
+                uses: actions/upload-release-asset@v1
+                env:
+                    GITHUB_TOKEN: ${{ github.token }}
+                with:
+                    upload_url: ${{ steps.create_release.outputs.upload_url }}
+                    asset_path: past-x86_64-unknown-linux-gnu/past
+                    asset_name: past-x86_64-unknown-linux-gnu     
+                    asset_content_type: application/octet-stream
+            - 
+                name: upload pastconv x86_64
+                uses: actions/upload-release-asset@v1
+                env:
+                    GITHUB_TOKEN: ${{ github.token }}
+                with:
+                    upload_url: ${{ steps.create_release.outputs.upload_url }}
+                    asset_path: past-x86_64-unknown-linux-gnu/pastconv
+                    asset_name: past-x86_64-unknown-linux-gnu     
+                    asset_content_type: application/octet-stream
+    

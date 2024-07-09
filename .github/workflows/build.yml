@@ -1,0 +1,36 @@
+name: Build
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        target: [
+          x86_64-unknown-linux-gnu,
+        ]
+    steps:
+      - uses: actions/checkout@v4
+      - name: deps
+        run: |
+          sudo apt install -y build-essential autoconf clang-14 flex bison pkg-config autopoint
+          sudo ln -s /usr/include/asm-generic /usr/include/asm
+          sudo rm -f /bin/clang
+          sudo ln -s /usr/bin/clang-14 /bin/clang
+      - uses: taiki-e/setup-cross-toolchain-action@v1
+        with:
+          target: ${{ matrix.target }}
+      - run: cargo install --path=past --root=. --target ${{ matrix.target }}
+      - run: cargo install --path=pastconv --root=. --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: past-${{ matrix.target }}
+          path: bin/past
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pastconv-${{ matrix.target }}
+          path: bin/pastconv

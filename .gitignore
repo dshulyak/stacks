@@ -1,0 +1,5 @@
+/target
+*.out
+output.bin
+..bfg-report
+.vagrant

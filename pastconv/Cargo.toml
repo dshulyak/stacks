@@ -1,0 +1,18 @@
+[package]
+name = "pastconv"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.86"
+clap = { version = "4.5.4", features = ["derive"] }
+datafusion = "38.0.0"
+parquet = "51.0.0"
+tokio = { version = "1.35.1", features = ["full", "macros"] }
+bytes = "1.6.0"
+humantime = "2.1.0"
+prost = "0.12"
+itertools = "0.13.0"
+
+[build-dependencies]
+prost-build = "0.5"

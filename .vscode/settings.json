@@ -1,0 +1,17 @@
+{
+    "rust-analyzer.check.command": "clippy",
+    "rust-analyzer.linkedProjects": [
+        "past/Cargo.toml",
+        "tracing-past/Cargo.toml",
+        "pastconv/Cargo.toml",
+        "e2e/Cargo.toml"
+    ],
+    "files.associations": {
+        "bpf_core_read.h": "c",
+        "bpf_helpers.h": "c",
+        "bpf_tracing.h": "c",
+        "vmlinux.h": "c",
+        "usdt.bpf.h": "c",
+        "errno.h": "c"
+    },
+}

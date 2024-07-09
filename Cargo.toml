@@ -1,0 +1,2 @@
+[workspace]
+members = ["e2e", "past", "pastconv", "tracing-past"]
