@@ -5,7 +5,7 @@ use blazesym::symbolize::{Reason, Sym, Symbolized};
 use datafusion::{
     arrow::{
         array::{AsArray, ListArray, RecordBatch},
-        datatypes::{Int32Type, Int64Type},
+        datatypes::{UInt16Type, UInt32Type, UInt64Type},
     },
     common::{FileType, GetExt},
     datasource::{file_format::parquet::ParquetFormat, listing::ListingOptions},
@@ -471,10 +471,10 @@ struct StoredPerf {
 impl Batch {
     fn iter_perf(&self) -> impl Iterator<Item = StoredPerf> + '_ {
         self.0.iter().flat_map(|batch| {
-            let timestamp = batch.column(0).as_primitive::<Int64Type>();
-            let cpu = batch.column(1).as_primitive::<Int32Type>();
-            let tgid = batch.column(2).as_primitive::<Int32Type>();
-            let pid = batch.column(3).as_primitive::<Int32Type>();
+            let timestamp = batch.column(0).as_primitive::<UInt64Type>();
+            let cpu = batch.column(1).as_primitive::<UInt16Type>();
+            let tgid = batch.column(2).as_primitive::<UInt32Type>();
+            let pid = batch.column(3).as_primitive::<UInt32Type>();
             let command = batch.column(4).as_string::<i32>();
 
             let ustack = batch.column(5);
@@ -492,7 +492,7 @@ impl Batch {
                 kstack_array.iter(),
             ))
             .map(|(timestamp, cpu, tgid, pid, command, ustack, kstack)| StoredPerf {
-                timestamp: *timestamp as u64,
+                timestamp: *timestamp,
                 cpu: *cpu as u64,
                 tgid: *tgid as u64,
                 pid: *pid as u64,
@@ -528,11 +528,11 @@ impl Batch {
 
     fn iter_switch(&self) -> impl Iterator<Item = StoredSwitch> + '_ {
         self.0.iter().flat_map(|batch| {
-            let timestamp = batch.column(0).as_primitive::<Int64Type>();
-            let duration = batch.column(1).as_primitive::<Int64Type>();
-            let cpu = batch.column(2).as_primitive::<Int32Type>();
-            let tgid = batch.column(3).as_primitive::<Int32Type>();
-            let pid = batch.column(4).as_primitive::<Int32Type>();
+            let timestamp = batch.column(0).as_primitive::<UInt64Type>();
+            let duration = batch.column(1).as_primitive::<UInt64Type>();
+            let cpu = batch.column(2).as_primitive::<UInt16Type>();
+            let tgid = batch.column(3).as_primitive::<UInt32Type>();
+            let pid = batch.column(4).as_primitive::<UInt32Type>();
             let command = batch.column(5).as_string::<i32>();
 
             let ustack = batch.column(6);
@@ -553,8 +553,8 @@ impl Batch {
             ))
             .map(
                 |(timestamp, duration, cpu, tgid, pid, command, ustack, kstack)| StoredSwitch {
-                    timestamp: *timestamp as u64,
-                    duration: *duration as u64,
+                    timestamp: *timestamp,
+                    duration: *duration,
                     cpu: *cpu as u64,
                     tgid: *tgid as u64,
                     pid: *pid as u64,

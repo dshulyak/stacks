@@ -11,7 +11,7 @@ use clap::Parser;
 use datafusion::{
     arrow::{
         array::{Array, AsArray, ListArray, RecordBatch},
-        datatypes::{Int32Type, Int64Type},
+        datatypes::{UInt32Type, UInt64Type},
     },
     common::{FileType, GetExt},
     datasource::{file_format::parquet::ParquetFormat, listing::ListingOptions},
@@ -194,15 +194,15 @@ struct OffcpuDataFrame(Vec<RecordBatch>);
 impl OffcpuDataFrame {
     fn iter(&self) -> impl Iterator<Item = OffcpuData> + '_ {
         self.0.iter().flat_map(|batch| {
-            let tgid = batch.column(0).as_primitive::<Int32Type>();
-            let pid = batch.column(1).as_primitive::<Int32Type>();
-            let offcpu = batch.column(2).as_primitive::<Int64Type>();
+            let tgid = batch.column(0).as_primitive::<UInt32Type>();
+            let pid = batch.column(1).as_primitive::<UInt32Type>();
+            let offcpu = batch.column(2).as_primitive::<UInt64Type>();
             let kstacks = batch.column(3).as_any().downcast_ref::<ListArray>().unwrap();
             multizip((tgid.iter(), pid.iter(), offcpu.iter(), kstacks.iter())).map(|(tgid, pid, offcpu, kstacks)| {
                 OffcpuData {
-                    tgid: tgid.unwrap_or(0) as u32,
-                    pid: pid.unwrap_or(0) as u32,
-                    offcpu: Duration::from_nanos(offcpu.unwrap_or(0) as u64),
+                    tgid: tgid.unwrap_or(0),
+                    pid: pid.unwrap_or(0),
+                    offcpu: Duration::from_nanos(offcpu.unwrap_or(0)),
                     kstack: kstacks,
                 }
             })

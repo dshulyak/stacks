@@ -65,8 +65,15 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
     }
 
     pub fn on_event(&mut self, event: Received) -> Result<()> {
-        self.stats.total_rows += 1;
-        self.stats.rows_in_current_file += 1;
+        // TODO i need to adjust stats based on response from on_event
+        // this is hotfix for ci
+        match event {
+            Received::TraceEnter(_) | Received::ProcessExec(_) | Received::ProcessExit(_) | Received::Unknown(_) => {}
+            Received::Switch(_) | Received::TraceExit(_) | Received::PerfStack(_) | Received::TraceClose(_) => {
+                self.stats.total_rows += 1;
+                self.stats.rows_in_current_file += 1;
+            }
+        }
         on_event(
             self.writer.as_mut().expect("writer should be present"),
             &self.frames,

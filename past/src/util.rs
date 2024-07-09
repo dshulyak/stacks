@@ -56,12 +56,12 @@ impl Deref for Comm {
 }
 
 #[derive(Debug)]
-pub(crate) struct Proc{
+pub(crate) struct Proc {
     pub(crate) tgid: i32,
-    pub(crate) comm: Comm, 
+    pub(crate) comm: Comm,
 }
 
-pub fn scan_proc(comms: HashSet<&str>,) -> anyhow::Result<Vec<Proc>> {
+pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
     let mut rst = vec![];
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
@@ -74,10 +74,10 @@ pub fn scan_proc(comms: HashSet<&str>,) -> anyhow::Result<Vec<Proc>> {
         if let Ok(tgid) = name.parse::<u32>() {
             let comm = fs::read_to_string(path.join("comm"))?;
             if comms.contains(comm.trim()) {
-                rst.push(Proc{
+                rst.push(Proc {
                     tgid: tgid as i32,
                     comm: Comm::from(&comm),
-                }); 
+                });
                 debug!("discovered tgid = {} for command = {}", tgid, comm);
             }
         }

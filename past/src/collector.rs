@@ -89,6 +89,7 @@ impl Collector {
         // all integers are cast to a signed form because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
+
         match event {
             Received::Switch(event) => {
                 let command = match self.tgid_to_command.get(&event.tgid) {
@@ -102,7 +103,7 @@ impl Collector {
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
-                    pid: event.tgid as i32,
+                    pid: event.pid as i32,
                     command: command.clone(),
                     ustack: event.ustack,
                     kstack: event.kstack,
