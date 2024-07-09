@@ -3,7 +3,7 @@ use std::{fs::File, path::PathBuf};
 use anyhow::{Context, Result};
 
 use crate::{
-    collector::{on_exit, Collector, Frames, Symbolizer},
+    collector::{on_exit, Collector, Frames, Received, Symbolizer},
     on_event,
     parquet::{Compression, Group, GroupWriter},
     util::{create_file, move_file_with_timestamp},
@@ -64,7 +64,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         })
     }
 
-    pub fn on_event(&mut self, event: &[u8]) -> Result<()> {
+    pub fn on_event(&mut self, event: Received) -> Result<()> {
         self.stats.total_rows += 1;
         self.stats.rows_in_current_file += 1;
         on_event(
@@ -95,7 +95,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             self.writer = Some(GroupWriter::with_compression(file, self.cfg.compression)?);
 
             // there is no eviction in symbolizer
-            // hence i to reset it, otherwise it will grow with every new discovered process
+            // hence i reset it, otherwise it will grow with every new discovered process
             //
             // no particular reason to reset symbolizer when file is switched
             self.symbolizer.reset();

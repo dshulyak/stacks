@@ -280,6 +280,27 @@ int handle__sched_process_exit(u64 *ctx)
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
 }
 
+SEC("tp_btf/sched_process_exec")
+int handle__sched_process_exec(u64 *ctx)
+{
+    struct task_struct *p = (void *)ctx[0];
+    if (apply_filters(p) > 0)
+    {
+        return 0;
+    }
+    struct process_exec_event *event = bpf_ringbuf_reserve(&events, sizeof(struct process_exec_event), 0);
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping process exec event\n");
+        return 0;
+    }
+    event->type = TYPE_PROCESS_EXEC_EVENT;
+    event->timestamp = bpf_ktime_get_ns();
+    event->tgid = p->tgid;
+    bpf_probe_read_kernel(&event->comm, sizeof(event->comm), &p->comm);
+    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+}
+
 SEC("usdt")
 int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 work_id, u64 amount, void *name)
 {
@@ -397,5 +418,6 @@ struct tracing_enter_event _tracing_enter_event = {0};
 struct tracing_exit_event _tracing_exit_event = {0};
 struct tracing_close_event _tracing_close_event = {0};
 struct process_exit_event _process_exit_event = {0};
+struct process_exec_event _process_exec_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

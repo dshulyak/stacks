@@ -213,7 +213,11 @@ fn main() -> Result<()> {
         .handle__sched_process_exit()
         .attach()
         .expect("attach sched exit");
-
+    let _sched_exec_link = skel
+        .progs_mut()
+        .handle__sched_process_exec()
+        .attach()
+        .expect("attach sched exec");
     let mut _usdt_links = vec![];
     for u in opt.usdt.iter() {
         let _usdt_enter = skel
@@ -251,8 +255,14 @@ fn main() -> Result<()> {
             .update(&comm, &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
     let comms = opt.commands.iter().map(|c| c.as_str()).collect::<HashSet<_>>();
-    scan_proc(comms, &mut MapsTgidIndex(skel.maps_mut().filter_tgid()))?;
-
+    // scan /proc after bpf prograns are attached
+    // to be sure that target comm is discovered either from proc or if it was exec'ed
+    let procs = scan_proc(comms)?;
+    for proc in procs.iter() {
+        let mut maps = skel.maps_mut(); 
+        maps.filter_tgid()
+            .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
+    }
     let maps = skel.maps();
     let mut program = program::Program::new(
         program::Config {
@@ -267,10 +277,19 @@ fn main() -> Result<()> {
         MapFrames(maps.stackmap()),
         BlazesymSymbolizer::new(),
     )?;
+    for proc in procs.iter() {
+        let fake_exec_event = past_types::process_exec_event{
+            timestamp: uptime.as_nanos() as u64,
+            tgid: proc.tgid as u32,
+            comm: *proc.comm,
+            ..Default::default()    
+        };
+        program.on_event(Received::ProcessExec(&fake_exec_event))?; 
+    }
     {
         let mut builder = RingBufferBuilder::new();
         builder.add(maps.events(), |buf: &[u8]| {
-            if let Err(err) = program.on_event(buf) {
+            if let Err(err) = program.on_event(buf.into()) {
                 error!("failed to process event: {:?}", err);
                 1
             } else {
@@ -312,16 +331,6 @@ impl Frames for MapFrames<'_> {
     }
 }
 
-struct MapsTgidIndex<'a>(&'a mut libbpf_rs::Map);
-
-impl util::TgidIndex for MapsTgidIndex<'_> {
-    fn insert(&mut self, key: u32) -> anyhow::Result<()> {
-        let buf = key.to_ne_bytes();
-        self.0.update(&buf, &[0], MapFlags::empty())?;
-        Ok(())
-    }
-}
-
 fn attach_perf_event(pefds: &[i32], prog: &mut libbpf_rs::Program) -> Vec<Result<libbpf_rs::Link, libbpf_rs::Error>> {
     pefds.iter().map(|pefd| prog.attach_perf_event(*pefd)).collect()
 }
@@ -331,9 +340,9 @@ fn on_event<W: Write + Send>(
     stacks: &impl Frames,
     collector: &mut Collector,
     symbolizer: &mut impl Symbolizer,
-    event: &[u8],
+    event: Received,
 ) -> Result<()> {
-    record(collector, symbolizer, stacks, event.into());
+    record(collector, symbolizer, stacks, event);
     if collector.group.is_full() {
         debug!("flushing stacks to disk");
         symbolize(collector, stacks, symbolizer)?;

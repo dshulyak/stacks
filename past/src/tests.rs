@@ -20,7 +20,7 @@ use tempfile::TempDir;
 use tokio::runtime::Runtime;
 
 use crate::{
-    collector::{null_terminated, to_bytes, Frames, Symbolizer},
+    collector::{null_terminated, to_bytes, Frames, Received, Symbolizer},
     past::past_types,
     program::{self, Program},
 };
@@ -334,11 +334,23 @@ impl StateMachineTest for TestState {
     type Reference = RefModel;
 
     fn init_test(ref_state: &RefState) -> Self::SystemUnderTest {
-        State::new(ref_state.row_group_size, ref_state.frames.clone())
+        let mut state = State::new(ref_state.row_group_size, ref_state.frames.clone());
+        for thread in ref_state.threads.iter() {
+            let fake_exec_event = past_types::process_exec_event {
+                tgid: thread.tgid as u32,
+                comm: thread.command(),
+                ..Default::default()
+            };
+            state
+                .program
+                .on_event(Received::ProcessExec(&fake_exec_event))
+                .expect("collected event");
+        }
+        state
     }
 
     fn apply(mut sut: Self::SystemUnderTest, _ref_state: &RefState, op: Op) -> Self::SystemUnderTest {
-        sut.program.on_event(op.as_slice()).expect("collected event");
+        sut.program.on_event(op.as_slice().into()).expect("collected event");
         sut
     }
 

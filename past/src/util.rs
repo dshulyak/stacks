@@ -36,6 +36,7 @@ pub fn parse_uptime() -> anyhow::Result<Duration> {
     Ok(Duration::from_secs(seconds) + Duration::from_millis(fraction_seconds * 10))
 }
 
+#[derive(Debug)]
 pub struct Comm([u8; 16]);
 
 impl From<&String> for Comm {
@@ -54,11 +55,14 @@ impl Deref for Comm {
     }
 }
 
-pub trait TgidIndex {
-    fn insert(&mut self, key: u32) -> anyhow::Result<()>;
+#[derive(Debug)]
+pub(crate) struct Proc{
+    pub(crate) tgid: i32,
+    pub(crate) comm: Comm, 
 }
 
-pub fn scan_proc(comms: HashSet<&str>, tgids: &mut impl TgidIndex) -> anyhow::Result<()> {
+pub fn scan_proc(comms: HashSet<&str>,) -> anyhow::Result<Vec<Proc>> {
+    let mut rst = vec![];
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
         let path = entry.path();
@@ -67,15 +71,18 @@ pub fn scan_proc(comms: HashSet<&str>, tgids: &mut impl TgidIndex) -> anyhow::Re
         }
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if let Ok(pid) = name.parse::<u32>() {
+        if let Ok(tgid) = name.parse::<u32>() {
             let comm = fs::read_to_string(path.join("comm"))?;
             if comms.contains(comm.trim()) {
-                tgids.insert(pid)?;
-                debug!("discovered tgid = {} for command = {}", pid, comm);
+                rst.push(Proc{
+                    tgid: tgid as i32,
+                    comm: Comm::from(&comm),
+                }); 
+                debug!("discovered tgid = {} for command = {}", tgid, comm);
             }
         }
     }
-    Ok(())
+    Ok(rst)
 }
 
 pub fn create_file(dir: &Path, prefix: &str) -> Result<File> {

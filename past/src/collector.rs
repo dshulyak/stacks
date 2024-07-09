@@ -22,6 +22,7 @@ unsafe impl Plain for past_types::tracing_enter_event {}
 unsafe impl Plain for past_types::tracing_exit_event {}
 unsafe impl Plain for past_types::tracing_close_event {}
 unsafe impl Plain for past_types::process_exit_event {}
+unsafe impl Plain for past_types::process_exec_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -36,6 +37,7 @@ fn to_event<T: Plain>(bytes: &[u8]) -> &T {
 pub(crate) enum Received<'a> {
     Switch(&'a past_types::switch_event),
     PerfStack(&'a past_types::perf_cpu_event),
+    ProcessExec(&'a past_types::process_exec_event),
     ProcessExit(&'a past_types::process_exit_event),
     TraceEnter(&'a past_types::tracing_enter_event),
     TraceExit(&'a past_types::tracing_exit_event),
@@ -52,6 +54,7 @@ impl<'a> From<&'a [u8]> for Received<'a> {
             3 => Received::TraceExit(to_event(bytes)),
             4 => Received::TraceClose(to_event(bytes)),
             5 => Received::ProcessExit(to_event(bytes)),
+            6 => Received::ProcessExec(to_event(bytes)),
             _ => Received::Unknown(bytes),
         }
     }
@@ -196,6 +199,9 @@ impl Collector {
                         });
                     }
                 }
+            }
+            Received::ProcessExec(event) => {
+                let _ = command(&mut self.tgid_to_command, event.tgid, &event.comm);
             }
             Received::ProcessExit(event) => {
                 self.tgid_to_command.remove(&event.tgid);

@@ -15,6 +15,7 @@
 #define TYPE_TRACING_EXIT_EVENT 3
 #define TYPE_TRACING_CLOSE_EVENT 4
 #define TYPE_PROCESS_EXIT_EVENT 5
+#define TYPE_PROCESS_EXEC_EVENT 6
 
 struct switch_event
 {
@@ -47,6 +48,15 @@ struct process_exit_event
     __u64 timestamp;
     __u32 tgid;
 };
+
+struct process_exec_event
+{
+    __u8 type;
+    __u64 timestamp;
+    __u32 tgid;
+    __u8 comm[TASK_COMM_LEN];
+};
+
 
 struct tracing_enter_event {
     __u8 type;
