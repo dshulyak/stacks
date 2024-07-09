@@ -88,26 +88,37 @@ impl Collector {
     pub(crate) fn collect(&mut self, event: Received) -> Result<()> {
         match event {
             Received::Switch(event) => {
-                let comm = command(&mut self.tgid_to_command, event.tgid, &event.comm);
+                let command = match self.tgid_to_command.get(&event.tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", event.tgid);
+                    }
+                };
                 self.group.collect(Event::Switch {
                     ts: event.end as i64,
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
                     pid: event.tgid as i32,
-                    command: comm,
+                    command: command.clone(),
                     ustack: event.ustack as i64,
                     kstack: event.kstack as i64,
                 });
             }
             Received::PerfStack(event) => {
                 if event.ustack > 0 || event.kstack > 0 {
+                    let command = match self.tgid_to_command.get(&event.tgid) {
+                        Some(command) => command,
+                        None => {
+                            anyhow::bail!("missing command for pid {}", event.tgid);
+                        }
+                    };
                     self.group.collect(Event::CPUStack {
                         ts: event.timestamp as i64,
                         cpu: event.cpu_id as i32,
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
-                        command: command(&mut self.tgid_to_command, event.tgid, &event.comm),
+                        command: command.clone(),
                         ustack: event.ustack as i64,
                         kstack: event.kstack as i64,
                     });

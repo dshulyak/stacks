@@ -174,9 +174,8 @@ int handle__sched_switch(u64 *ctx)
     {
         return 0;
     }
-    // filtering based on ringbuf memory doesn't work on kernel used in ubuntu 22.04 distro.
-    // bpf_map_lookup_elem restricted to fp, pkt, pkt_meta, map_key, map_value
-    if (apply_filters(prev) > 0)
+    u32 tgid = prev->tgid;
+    if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
     }
@@ -186,7 +185,6 @@ int handle__sched_switch(u64 *ctx)
         bpf_printk_debug("ringbuf full. dropping switch event\n");
         return 0;
     }
-    bpf_probe_read_kernel(&event->comm, sizeof(event->comm), &prev->comm);
     event->type = TYPE_SWITCH_EVENT;
     event->start = start;
     event->end = end;
@@ -233,7 +231,6 @@ int handle__perf_event(void *ctx)
         bpf_printk_debug("ringbuf full. dropping perf event\n");
         return 0;
     }
-    bpf_get_current_comm(&event->comm, sizeof(event->comm));
     event->type = TYPE_PERF_CPU_EVENT;
     event->timestamp = bpf_ktime_get_ns();
     event->tgid = tgid;

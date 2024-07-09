@@ -27,7 +27,6 @@ struct switch_event
     __u32 cpu_id;
     __s32 ustack;
     __s32 kstack;
-    __u8 comm[TASK_COMM_LEN];
 };
 
 struct perf_cpu_event
@@ -39,7 +38,6 @@ struct perf_cpu_event
     __u32 cpu_id;
     __s32 ustack;
     __s32 kstack;
-    __u8 comm[TASK_COMM_LEN];
 };
 
 struct process_exit_event

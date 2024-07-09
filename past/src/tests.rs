@@ -239,7 +239,6 @@ impl ReferenceStateMachine for RefModel {
                     end: cores[cpu as usize] + duration,
                     tgid: threads[thread].tgid as u32,
                     pid: threads[thread].pid as u32,
-                    comm: threads[thread].command(),
                     ustack,
                     kstack,
                     ..Default::default()
@@ -263,7 +262,6 @@ impl ReferenceStateMachine for RefModel {
                     timestamp: cores[cpu as usize] + duration,
                     tgid: threads[thread].tgid as u32,
                     pid: threads[thread].pid as u32,
-                    comm: threads[thread].command(),
                     ustack,
                     kstack,
                     ..Default::default()
@@ -400,13 +398,18 @@ async fn verify_switches(ctx: &SessionContext, ref_state: &RefState) {
     // }
 
     let batch = read(ctx, SWITCH_QUERY_WITH_STACKS).await;
+    let tgid_to_comm = ref_state
+        .threads
+        .iter()
+        .map(|thread| (thread.tgid as u32, thread.command()))
+        .collect::<HashMap<u32, [u8; 16]>>();
     let traces = ref_state.persisted_traces.iter().map(|switch| StoredSwitch {
         timestamp: switch.end,
         duration: switch.end - switch.start,
         cpu: switch.cpu_id as u64,
         tgid: switch.tgid as u64,
         pid: switch.pid as u64,
-        command: String::from_utf8_lossy(null_terminated(&switch.comm)).to_string(),
+        command: String::from_utf8_lossy(null_terminated(&tgid_to_comm[&switch.tgid])).to_string(),
         ustack: resolved(&ref_state.frames, &ref_state.symbolizer, switch.ustack),
         kstack: resolved(&ref_state.frames, &ref_state.symbolizer, switch.kstack),
     });
@@ -420,12 +423,17 @@ async fn verify_perf(ctx: &SessionContext, ref_state: &RefState) {
     // }
 
     let batch = read(ctx, STACKS_QUERY).await;
+    let tgid_to_comm = ref_state
+        .threads
+        .iter()
+        .map(|thread| (thread.tgid as u32, thread.command()))
+        .collect::<HashMap<u32, [u8; 16]>>();
     let stacks = ref_state.persisted_stacks.iter().map(|perf| StoredPerf {
         timestamp: perf.timestamp,
         cpu: perf.cpu_id as u64,
         tgid: perf.tgid as u64,
         pid: perf.pid as u64,
-        command: String::from_utf8_lossy(null_terminated(&perf.comm)).to_string(),
+        command: String::from_utf8_lossy(null_terminated(&tgid_to_comm[&perf.tgid])).to_string(),
         ustack: resolved(&ref_state.frames, &ref_state.symbolizer, perf.ustack),
         kstack: resolved(&ref_state.frames, &ref_state.symbolizer, perf.kstack),
     });
