@@ -15,7 +15,7 @@ struct Opt {
     cmd: Command,
     #[clap(short, long, global = true, default_value = "/tmp/past/STACKS-*.parquet")]
     register: String,
-    #[clap(short, long, global = true, help="print version and exit")]
+    #[clap(short, long, global = true, help = "print version and exit")]
     version: bool,
 }
 
