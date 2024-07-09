@@ -259,6 +259,10 @@ SEC("tp_btf/sched_process_exit")
 int handle__sched_process_exit(u64 *ctx)
 {
     struct task_struct *p = (void *)ctx[0];
+    if (p->tgid != p->pid) 
+    {
+        return 0;
+    }
     u64 tgid = p->tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
@@ -281,6 +285,10 @@ SEC("tp_btf/sched_process_exec")
 int handle__sched_process_exec(u64 *ctx)
 {
     struct task_struct *p = (void *)ctx[0];
+    if (p->tgid != p->pid) 
+    {
+        return 0;
+    }
     if (apply_filters(p) > 0)
     {
         return 0;

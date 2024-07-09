@@ -1,12 +1,9 @@
 name: test
 
 on:
-  push:
+  pull_request:
     branches:
       - "**"
-      - "!dependabot/**"
-  pull_request:
-    branches: [master]
   workflow_call:
 
 jobs:
