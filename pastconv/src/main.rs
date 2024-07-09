@@ -15,6 +15,8 @@ struct Opt {
     cmd: Command,
     #[clap(short, long, global = true, default_value = "/tmp/past/STACKS-*.parquet")]
     register: String,
+    #[clap(short, long, global = true, help="print version and exit")]
+    version: bool,
 }
 
 #[derive(Parser)]
@@ -46,6 +48,10 @@ enum PprofCommand {
 #[tokio::main]
 async fn main() -> Result<()> {
     let opt = Opt::parse();
+    if opt.version {
+        println!("pastconv {}", env!("VERSION"));
+        return Ok(());
+    }
     match opt.cmd {
         Command::Pprof { destination, cmd } => match cmd {
             PprofCommand::Cpu { command } => {

@@ -40,6 +40,8 @@ itertools = "0.13.0"
 lazy_static = "1.4.0"
 
 [build-dependencies]
+anyhow = "1.0"
+grev = "0.1.3"
 libbpf-cargo = "0.23"
 vmlinux = { git = "https://github.com/libbpf/libbpf-rs", tag = "v0.23.3"}
 

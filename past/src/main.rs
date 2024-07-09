@@ -42,7 +42,7 @@ mod util;
 #[derive(Debug, Parser)]
 struct Opt {
     #[clap(
-        num_args = 1.., required = true,
+        num_args = 1..,
         help = "filter all threads of the process by the process command name. value in /proc/<pid>/comm"
     )]
     commands: Vec<String>,
@@ -117,6 +117,9 @@ struct Opt {
     perf_cpu_frequncy: u64,
     #[clap(long, default_value = "u", help = "which stacks to collect on perf event")]
     perf_cpu_stacks: StackOptions,
+
+    #[clap(long, default_value = "false", help = "print version and exit")]
+    version: bool,
 }
 
 #[derive(Parser, Debug, Clone, ValueEnum)]
@@ -128,6 +131,15 @@ enum StackOptions {
 }
 
 fn main() -> Result<()> {
+    let opt: Opt = Opt::parse();
+    if opt.version {
+        println!("past {}", env!("VERSION"));
+        return Ok(());
+    }
+    if opt.commands.is_empty() {
+        anyhow::bail!("at least one command must be provided");
+    }
+
     // the levels for fmt and past subscriber are intentionally different.
     // i want to collect latency for basic operations all the time to evaluate performance
     let registry = Registry::default()
@@ -140,14 +152,14 @@ fn main() -> Result<()> {
         )
         .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::from_default_env()));
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global default subscriber");
-
+    
     let interrupt = Arc::new(AtomicBool::new(true));
     let interrupt_handler = interrupt.clone();
     ctrlc::set_handler(move || {
         interrupt_handler.store(false, Ordering::Relaxed);
     })?;
 
-    let opt: Opt = Opt::parse();
+    
     util::ensure_exists(&opt.dir)?;
 
     let uptime = util::parse_uptime()?;
