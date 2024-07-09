@@ -4,7 +4,7 @@ use anyhow::Result;
 use datafusion::{
     arrow::{
         array::{Array, AsArray, ListArray, RecordBatch},
-        datatypes::Int64Type,
+        datatypes::{Int64Type, UInt64Type},
     },
     execution::context::SessionContext,
 };
@@ -91,12 +91,18 @@ impl Batch {
     fn iter(&self) -> impl Iterator<Item = Stacks> + '_ {
         self.0.iter().flat_map(|batch| {
             let stacks = batch.column(0).as_any().downcast_ref::<ListArray>().unwrap();
-            let count = batch.column(1).as_primitive::<Int64Type>();
-            let duration = batch.column(2).as_primitive::<Int64Type>();
+            let count = batch
+                .column(1)
+                .as_primitive_opt::<Int64Type>()
+                .expect("count should be int64");
+            let duration = batch
+                .column(2)
+                .as_primitive_opt::<UInt64Type>()
+                .expect("duration should be uint64");
             multizip((count.iter(), stacks.iter(), duration.iter())).map(|(count, stacks, duration)| Stacks {
                 count: count.unwrap_or(0),
                 stacks: stacks.clone(),
-                duration: duration.unwrap_or(0),
+                duration: duration.unwrap_or(0) as i64,
             })
         })
     }
@@ -110,7 +116,13 @@ struct Stacks {
 
 impl Stacks {
     fn stacks(&self) -> impl Iterator<Item = &str> + '_ {
-        self.stacks.as_ref().unwrap().as_string::<i32>().iter().flatten()
+        self.stacks
+            .as_ref()
+            .unwrap()
+            .as_string_opt::<i32>()
+            .expect("stacks should be string array")
+            .iter()
+            .flatten()
     }
 }
 
@@ -195,12 +207,13 @@ async fn get_start_time(ctx: &SessionContext) -> Result<i64> {
         .next()
         .expect("expecting single batch")
         .column(0)
-        .as_primitive::<Int64Type>()
+        .as_primitive_opt::<UInt64Type>()
+        .expect("start time should be uint64")
         .into_iter()
         .next()
         .expect("expecting single row")
         .expect("single timestamp value");
-    Ok(min_timestamp)
+    Ok(min_timestamp as i64)
 }
 
 pub async fn pprof(register: &str, destination: &PathBuf, query: &str, command: Option<&str>) -> Result<()> {

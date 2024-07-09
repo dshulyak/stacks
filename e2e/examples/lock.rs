@@ -38,4 +38,5 @@ fn main() {
             state.inc(sleep_duration);
         });
     });
+    sleep(sleep_duration);
 }
