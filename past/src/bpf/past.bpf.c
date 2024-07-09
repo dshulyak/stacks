@@ -133,7 +133,7 @@ __always_inline int apply_filters(struct task_struct *task)
     __u8 comm[TASK_COMM_LEN];
 
     if (cfg.filter_tgid)
-    {   
+    {
         if (bpf_map_lookup_elem(&filter_tgid, &tgid))
         {
             return 0;
@@ -263,7 +263,21 @@ int handle__sched_process_exit(u64 *ctx)
 {
     struct task_struct *p = (void *)ctx[0];
     u64 tgid = p->tgid;
+    if (apply_tgid_filter(tgid) > 0)
+    {
+        return 0;
+    }
     bpf_map_delete_elem(&filter_tgid, &tgid);
+    struct process_exit_event *event = bpf_ringbuf_reserve(&events, sizeof(struct process_exit_event), 0);
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping process exit event\n");
+        return 0;
+    }
+    event->type = TYPE_PROCESS_EXIT_EVENT;
+    event->timestamp = bpf_ktime_get_ns();
+    event->tgid = tgid;
+    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
 }
 
 SEC("usdt")
@@ -382,5 +396,6 @@ struct perf_cpu_event _perf_cpu_event = {0};
 struct tracing_enter_event _tracing_enter_event = {0};
 struct tracing_exit_event _tracing_exit_event = {0};
 struct tracing_close_event _tracing_close_event = {0};
+struct process_exit_event _process_exit_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

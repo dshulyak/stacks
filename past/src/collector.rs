@@ -21,6 +21,7 @@ unsafe impl Plain for past_types::perf_cpu_event {}
 unsafe impl Plain for past_types::tracing_enter_event {}
 unsafe impl Plain for past_types::tracing_exit_event {}
 unsafe impl Plain for past_types::tracing_close_event {}
+unsafe impl Plain for past_types::process_exit_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -34,7 +35,8 @@ fn to_event<T: Plain>(bytes: &[u8]) -> &T {
 #[derive(Debug, Clone)]
 pub(crate) enum Received<'a> {
     Switch(&'a past_types::switch_event),
-    Perf(&'a past_types::perf_cpu_event),
+    PerfStack(&'a past_types::perf_cpu_event),
+    ProcessExit(&'a past_types::process_exit_event),
     TraceEnter(&'a past_types::tracing_enter_event),
     TraceExit(&'a past_types::tracing_exit_event),
     TraceClose(&'a past_types::tracing_close_event),
@@ -45,10 +47,11 @@ impl<'a> From<&'a [u8]> for Received<'a> {
     fn from(bytes: &'a [u8]) -> Self {
         match bytes[0] {
             0 => Received::Switch(to_event(bytes)),
-            1 => Received::Perf(to_event(bytes)),
+            1 => Received::PerfStack(to_event(bytes)),
             2 => Received::TraceEnter(to_event(bytes)),
             3 => Received::TraceExit(to_event(bytes)),
             4 => Received::TraceClose(to_event(bytes)),
+            5 => Received::ProcessExit(to_event(bytes)),
             _ => Received::Unknown(bytes),
         }
     }
@@ -82,26 +85,26 @@ impl Collector {
     pub(crate) fn collect(&mut self, event: Received) -> Result<()> {
         match event {
             Received::Switch(event) => {
-                let comm = command(&mut self.tgid_to_command, event.pid, &event.comm);
+                let comm = command(&mut self.tgid_to_command, event.tgid, &event.comm);
                 self.group.collect(Event::Switch {
                     ts: event.end as i64,
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
-                    pid: event.pid as i32,
+                    pid: event.tgid as i32,
                     command: comm,
                     ustack: event.ustack as i64,
                     kstack: event.kstack as i64,
                 });
             }
-            Received::Perf(event) => {
+            Received::PerfStack(event) => {
                 if event.ustack > 0 || event.kstack > 0 {
-                    self.group.collect(Event::Stack {
+                    self.group.collect(Event::CPUStack {
                         ts: event.timestamp as i64,
                         cpu: event.cpu_id as i32,
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
-                        command: command(&mut self.tgid_to_command, event.pid, &event.comm),
+                        command: command(&mut self.tgid_to_command, event.tgid, &event.comm),
                         ustack: event.ustack as i64,
                         kstack: event.kstack as i64,
                     });
@@ -129,10 +132,10 @@ impl Collector {
                 };
             }
             Received::TraceExit(event) => {
-                let command = match self.tgid_to_command.get(&event.pid) {
+                let command = match self.tgid_to_command.get(&event.tgid) {
                     Some(command) => command,
                     None => {
-                        anyhow::bail!("missing command for pid {}", event.pid);
+                        anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
                 let span = match self
@@ -194,6 +197,17 @@ impl Collector {
                     }
                 }
             }
+            Received::ProcessExit(event) => {
+                self.tgid_to_command.remove(&event.tgid);
+                let entries = self
+                    .tgid_span_id_pid_to_enter
+                    .range((event.tgid, 0, 0)..(event.tgid, u64::MAX, u32::MAX))
+                    .map(|(k, _)| (k.1, k.2))
+                    .collect::<Vec<_>>();
+                for (span_id, pid) in entries {
+                    self.tgid_span_id_pid_to_enter.remove(&(event.tgid, span_id, pid));
+                }
+            }
             Received::Unknown(event) => {
                 anyhow::bail!("unknown event type: {:?}", event);
             }
@@ -202,9 +216,9 @@ impl Collector {
     }
 }
 
-fn command(commands: &mut HashMap<u32, Bytes>, pid: u32, command: &[u8]) -> Bytes {
+fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[u8]) -> Bytes {
     let comm = null_terminated(command);
-    let existing = commands.entry(pid);
+    let existing = commands.entry(tgid);
     match existing {
         hash_map::Entry::Vacant(vacant) => vacant.insert(Bytes::copy_from_slice(comm)).clone(),
         hash_map::Entry::Occupied(mut occupied) => {

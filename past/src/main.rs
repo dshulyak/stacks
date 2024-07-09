@@ -363,7 +363,7 @@ fn record(collector: &mut Collector, symbolizer: &mut impl Symbolizer, frames: &
                     .unwrap();
             }
         }
-        Received::Perf(event) => {
+        Received::PerfStack(event) => {
             if event.kstack > 0 || event.ustack > 0 {
                 symbolizer
                     .cache_tgid(event.tgid as i32, event.ustack as i64, frames)

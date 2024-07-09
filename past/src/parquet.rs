@@ -13,38 +13,34 @@ use parquet::{
     schema::{parser::parse_message_type, types},
 };
 
-pub enum StackKind {
+pub enum EventKind {
     // Perf collected from sampling process
     Perf,
     // Collected when process is switched out by the scheduler
     Switch,
-    Irq,
-    Softirq,
     TraceExit,
     TraceClose,
 }
 
-impl From<StackKind> for &'static [u8] {
-    fn from(kind: StackKind) -> &'static [u8] {
+impl From<EventKind> for &'static [u8] {
+    fn from(kind: EventKind) -> &'static [u8] {
         match kind {
-            StackKind::Perf => b"perf",
-            StackKind::Switch => b"switch",
-            StackKind::Irq => b"irq",
-            StackKind::Softirq => b"softirq",
-            StackKind::TraceExit => b"trace_exit",
-            StackKind::TraceClose => b"trace_close",
+            EventKind::Perf => b"perf",
+            EventKind::Switch => b"switch",
+            EventKind::TraceExit => b"trace_exit",
+            EventKind::TraceClose => b"trace_close",
         }
     }
 }
 
-impl From<StackKind> for Bytes {
-    fn from(kind: StackKind) -> Bytes {
+impl From<EventKind> for Bytes {
+    fn from(kind: EventKind) -> Bytes {
         Bytes::from_static(kind.into())
     }
 }
 
-impl From<StackKind> for ByteArray {
-    fn from(kind: StackKind) -> ByteArray {
+impl From<EventKind> for ByteArray {
+    fn from(kind: EventKind) -> ByteArray {
         let byts: Bytes = kind.into();
         byts.into()
     }
@@ -86,7 +82,7 @@ pub enum Event {
         ustack: i64,
         kstack: i64,
     },
-    Stack {
+    CPUStack {
         ts: i64,
         cpu: i32,
         tgid: i32,
@@ -234,7 +230,7 @@ impl Group {
                 kstack,
             } => {
                 self.duration.push(duration);
-                self.kind.push(StackKind::Switch.into());
+                self.kind.push(EventKind::Switch.into());
                 self.cpu.push(cpu);
                 self.tgid.push(tgid);
                 self.pid.push(pid);
@@ -244,7 +240,7 @@ impl Group {
                 self.add_empty_trace();
                 self.add_timestamp(ts);
             }
-            Event::Stack {
+            Event::CPUStack {
                 ts,
                 cpu,
                 tgid,
@@ -254,7 +250,7 @@ impl Group {
                 kstack,
             } => {
                 self.duration.push(self.perf_freq);
-                self.kind.push(StackKind::Perf.into());
+                self.kind.push(EventKind::Perf.into());
                 self.cpu.push(cpu);
                 self.tgid.push(tgid);
                 self.pid.push(pid);
@@ -279,7 +275,7 @@ impl Group {
                 ustack,
             } => {
                 self.duration.push(duration);
-                self.kind.push(StackKind::TraceExit.into());
+                self.kind.push(EventKind::TraceExit.into());
                 self.cpu.push(cpu);
                 self.tgid.push(tgid);
                 self.pid.push(pid);
@@ -307,7 +303,7 @@ impl Group {
                 command,
             } => {
                 self.duration.push(duration);
-                self.kind.push(StackKind::TraceClose.into());
+                self.kind.push(EventKind::TraceClose.into());
                 self.cpu.push(cpu);
                 self.tgid.push(tgid);
                 self.pid.push(pid);
