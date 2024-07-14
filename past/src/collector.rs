@@ -420,14 +420,17 @@ pub(crate) trait Symbolizer {
 
     fn reset(&mut self);
 
-    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>, anyhow::Error>;
+    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
 
-    fn cache_tgid(&mut self, tgid: i32, ustack: i64, frames: &impl Frames) -> Result<(), anyhow::Error>;
+    fn cache_tgid(&mut self, tgid: i32) -> Result<()>;
 
-    fn user_symbolize(&self, pid: i32, addr: &[u64]) -> Result<Vec<Symbolized>, anyhow::Error>;
+    fn user_symbolize(&self, pid: i32, addr: &[u64]) -> Result<Vec<Symbolized>>;
 }
 
 pub(crate) struct BlazesymSymbolizer {
+    // kernel_symbolizer can be reused for the whole lifetime of the program,
+    // technically it is exactly same object, but it will not cache any userspace files for symbolization
+    kernel_symbolizer: symbolize::Symbolizer,
     symbolizer: symbolize::Symbolizer,
     tried: HashSet<i32>,
 }
@@ -435,6 +438,7 @@ pub(crate) struct BlazesymSymbolizer {
 impl Symbolizer for BlazesymSymbolizer {
     fn new() -> Self {
         Self {
+            kernel_symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
             symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
             tried: HashSet::new(),
         }
@@ -445,17 +449,14 @@ impl Symbolizer for BlazesymSymbolizer {
         self.tried = HashSet::new();
     }
 
-    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>, anyhow::Error> {
+    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
         let rst = self
-            .symbolizer
+            .kernel_symbolizer
             .symbolize(&Source::Kernel(Kernel::default()), Input::AbsAddr(addr))?;
         Ok(rst)
     }
 
-    fn cache_tgid(&mut self, tgid: i32, ustack: i64, _frames: &impl Frames) -> Result<(), anyhow::Error> {
-        if ustack <= 0 {
-            return Ok(());
-        }
+    fn cache_tgid(&mut self, tgid: i32) -> Result<()> {
         if self.tried.contains(&tgid) {
             return Ok(());
         }

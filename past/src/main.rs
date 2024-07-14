@@ -356,16 +356,12 @@ fn on_event<W: Write + Send>(
     match buf {
         Received::Switch(event) => {
             if event.kstack > 0 || event.ustack > 0 {
-                symbolizer
-                    .cache_tgid(event.tgid as i32, event.ustack as i64, frames)
-                    .unwrap();
+                symbolizer.cache_tgid(event.tgid as i32).unwrap();
             }
         }
         Received::PerfStack(event) => {
             if event.kstack > 0 || event.ustack > 0 {
-                symbolizer
-                    .cache_tgid(event.tgid as i32, event.ustack as i64, frames)
-                    .unwrap();
+                symbolizer.cache_tgid(event.tgid as i32).unwrap();
             }
         }
         _ => {}
@@ -392,4 +388,3 @@ fn flush_group<W: Write + Send>(stack_writer: &mut GroupWriter<W>, collector: &m
 fn symbolize(collector: &mut Collector, stacks: &impl Frames, symbolizer: &mut impl Symbolizer) -> Result<()> {
     on_symbolize(&mut collector.group, stacks, symbolizer)
 }
-

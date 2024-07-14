@@ -80,7 +80,7 @@ impl Symbolizer for TestSymbolizer {
 
     fn reset(&mut self) {}
 
-    fn cache_tgid(&mut self, _tgid: i32, _ustack: i64, _frames: &impl Frames) -> anyhow::Result<(), anyhow::Error> {
+    fn cache_tgid(&mut self, _tgid: i32) -> anyhow::Result<()> {
         Ok(())
     }
 
