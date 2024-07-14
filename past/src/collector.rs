@@ -1,6 +1,5 @@
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
-    io::Write,
     iter::empty,
     num::NonZeroU32,
 };
@@ -9,10 +8,10 @@ use anyhow::Result;
 use blazesym::symbolize::{self, Input, Kernel, Process, Source, Symbolized};
 use bytes::{Bytes, BytesMut};
 use plain::Plain;
-use tracing::{debug, warn};
+use tracing::{debug, instrument, warn};
 
 use crate::{
-    parquet::{Event, Group, GroupWriter},
+    parquet::{Event, Group},
     past::past_types,
 };
 
@@ -258,25 +257,11 @@ pub(crate) fn null_terminated(bytes: &[u8]) -> &[u8] {
     }
 }
 
-pub(crate) fn on_exit<W: Write + Send>(
-    mut stack_writer: GroupWriter<W>,
-    stack_group: &mut Group,
-    symbolizer: &impl Symbolizer,
-    stacks: &impl Frames,
-) -> Result<()> {
-    if !stack_group.is_empty() {
-        symbolize(symbolizer, stacks, stack_group);
-        stack_writer.write(stack_group)?;
-        stack_group.reuse();
-    }
-    stack_writer.close()?;
-    Ok(())
-}
-
 pub(crate) trait Frames {
     fn frames(&self, id: i32) -> Result<Vec<u64>>;
 }
 
+#[instrument(skip_all)]
 pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
     let mut addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
@@ -293,25 +278,25 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
                     }
                 }
                 Err(err) => {
-                    debug!("frames: {}", err);
+                    debug!("collecting kernel frames: {}", err);
                 }
             }
             (stack_id, trace)
         })
         .collect();
     let req = unique.into_iter().collect::<Vec<_>>();
-    let symbols = match symbolizer.symbolize_kernel(&req) {
-        Ok(syms) => syms,
+    match symbolizer.symbolize_kernel(&req) {
+        Ok(syms) => {
+            for (symbol, addr) in syms.into_iter().zip(req.into_iter()) {
+                if let Some(sym) = symbol.as_sym() {
+                    addresses.insert((-1, addr), Bytes::copy_from_slice(sym.name.as_bytes()));
+                }
+            }
+        }
         Err(err) => {
-            debug!("symbolize: {}", err);
-            return;
+            warn!("symbolize kernel addresses: {}", err);
         }
     };
-    for (symbol, addr) in symbols.into_iter().zip(req.into_iter()) {
-        if let Some(sym) = symbol.as_sym() {
-            addresses.insert((-1, addr), Bytes::copy_from_slice(sym.name.as_bytes()));
-        }
-    }
 
     let mut ustack_traces = HashMap::new();
     let mut ustacks = HashMap::new();
@@ -330,7 +315,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
                     }
                 }
                 Err(err) => {
-                    debug!("frames: {}", err);
+                    debug!("collecting user frames: {}", err);
                 }
             }
             ustack_traces.insert(stack_id, trace);
@@ -342,7 +327,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         let symbols = match symbolizer.symbolize_process(tgid as u32, &req) {
             Ok(syms) => syms,
             Err(err) => {
-                debug!("symbolize: tgid={} err={}", tgid, err);
+                debug!("symbolizing process {}: {}", tgid, err);
                 continue;
             }
         };
@@ -351,7 +336,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
                 let name = sym.name.as_bytes();
                 let offset = sym.offset.to_string();
                 let offset: &[u8] = offset.as_bytes();
-                let mut buf = BytesMut::with_capacity(name.len() + offset.len() + 1);
+                let mut buf: BytesMut = BytesMut::with_capacity(name.len() + offset.len() + 1);
                 buf.extend_from_slice(name);
                 if sym.offset > 0 {
                     buf.extend_from_slice(b"+");
@@ -444,7 +429,6 @@ impl Symbolizer for BlazesymSymbolizer {
     }
 
     fn init_symbolizer(&mut self, tgid: u32) -> Result<()> {
-        debug!("instantiating symbolizer for tgid={}", tgid);
         let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
         if let Err(err) = symbolizer.symbolize(
             &Source::Process(Process {
@@ -456,7 +440,7 @@ impl Symbolizer for BlazesymSymbolizer {
             }),
             Input::AbsAddr(&[]),
         ) {
-            warn!("caching unsuccesful for tgid={} err={}", tgid, err);
+            debug!("caching unsuccesful for tgid={} err={}", tgid, err);
         }
         self.symbolizers.insert(tgid, symbolizer);
         Ok(())

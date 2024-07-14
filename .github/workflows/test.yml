@@ -33,9 +33,9 @@ jobs:
       - name: e2e test (runs with sudo)
         run: |
           if [ "${{ matrix.profile }}" = "dev" ]; then
-            sudo ./target/debug/e2e ./target/debug/past ./target/debug/examples
+            sudo RUST_LOG=debug ./target/debug/e2e ./target/debug/past ./target/debug/examples
           elif [ "${{ matrix.profile }}" = "release" ]; then
-            sudo ./target/release/e2e ./target/release/past ./target/release/examples
+            sudo RUST_LOG=debug ./target/release/e2e ./target/release/past ./target/release/examples
           else
             echo "Error: Profile '${{ matrix.profile }}' is not expected."
             exit 1

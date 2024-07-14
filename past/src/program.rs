@@ -1,10 +1,10 @@
 use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
-use tracing::{instrument, warn};
+use tracing::{debug, warn};
 
 use crate::{
-    collector::{on_exit, symbolize, Collector, Frames, Received, Symbolizer},
+    collector::{symbolize, Collector, Frames, Received, Symbolizer},
     parquet::{Compression, Group, GroupWriter},
     util::{create_file, move_file_with_timestamp},
 };
@@ -88,8 +88,12 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             warn!("failed to collect event: {:?}", err);
         }
         if self.collector.group.is_full() {
-            symbolize_batch(&mut self.collector, &self.frames, &mut self.symbolizer).context("symbolize batch")?;
-            flush_batch(self.writer.as_mut().expect("writer must exist"), &mut self.collector)?;
+            debug!("group is full, symbolizing and flushing");
+            symbolize(&self.symbolizer, &self.frames, &mut self.collector.group);
+            self.writer
+                .as_mut()
+                .expect("writer must exist")
+                .write(&self.collector.group)?;
             self.collector.group.reuse();
             for tgid in self.symbolizer_tgid_cleanup.drain() {
                 self.symbolizer.drop_symbolizer(tgid)?;
@@ -122,8 +126,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
 
     pub fn exit(mut self) -> Result<()> {
         if let Some(writer) = self.writer {
-            on_exit(writer, &mut self.collector.group, &self.symbolizer, &self.frames)
-                .context("closing current file")?;
+            on_exit(writer, &mut self.collector.group, &self.symbolizer, &self.frames).context("closing last file")?;
             move_file_with_timestamp(
                 &self.cfg.directory,
                 PENDING_FILE_PREFIX,
@@ -135,14 +138,18 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
     }
 }
 
-#[instrument(skip_all)]
-fn flush_batch<W: Write + Send>(stack_writer: &mut GroupWriter<W>, collector: &mut Collector) -> Result<()> {
-    stack_writer.write(&collector.group)
-}
-
-#[instrument(skip_all)]
-fn symbolize_batch(collector: &mut Collector, stacks: &impl Frames, symbolizer: &mut impl Symbolizer) -> Result<()> {
-    symbolize(symbolizer, stacks, &mut collector.group);
-    collector.group.reuse_unresolved();
+fn on_exit<W: Write + Send>(
+    mut stack_writer: GroupWriter<W>,
+    stack_group: &mut Group,
+    symbolizer: &impl Symbolizer,
+    stacks: &impl Frames,
+) -> Result<()> {
+    if !stack_group.is_empty() {
+        debug!("symbolizing remaining stacks and flushing group");
+        symbolize(symbolizer, stacks, stack_group);
+        stack_writer.write(stack_group)?;
+        stack_group.reuse();
+    }
+    stack_writer.close()?;
     Ok(())
 }
