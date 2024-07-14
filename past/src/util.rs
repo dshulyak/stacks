@@ -39,8 +39,8 @@ pub fn parse_uptime() -> anyhow::Result<Duration> {
 #[derive(Debug)]
 pub struct Comm([u8; 16]);
 
-impl From<&String> for Comm {
-    fn from(s: &String) -> Self {
+impl From<&str> for Comm {
+    fn from(s: &str) -> Self {
         let mut comm = [0; 16];
         comm[..s.len()].copy_from_slice(s.as_bytes());
         Self(comm)
@@ -73,10 +73,11 @@ pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
         let name = name.to_string_lossy();
         if let Ok(tgid) = name.parse::<u32>() {
             let comm = fs::read_to_string(path.join("comm"))?;
-            if comms.contains(comm.trim()) {
+            let trimmed= comm.trim();
+            if comms.contains(trimmed) {
                 rst.push(Proc {
                     tgid: tgid as i32,
-                    comm: Comm::from(&comm),
+                    comm: Comm::from(trimmed),
                 });
                 debug!("discovered tgid = {} for command = {}", tgid, comm);
             }

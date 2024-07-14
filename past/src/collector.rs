@@ -486,7 +486,7 @@ impl Symbolizer for BlazesymSymbolizer {
         let rst = self.symbolizer.symbolize(
             &Source::Process(Process {
                 pid: blazesym::Pid::Pid(NonZeroU32::new(pid as u32).unwrap()),
-                debug_syms: false,
+                debug_syms: true,
                 perf_map: false,
                 map_files: true,
                 _non_exhaustive: (),
