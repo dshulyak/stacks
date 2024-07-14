@@ -78,13 +78,15 @@ impl Symbolizer for TestSymbolizer {
         }
     }
 
-    fn reset(&mut self) {}
-
-    fn cache_tgid(&mut self, _tgid: i32) -> anyhow::Result<()> {
+    fn init_symbolizer(&mut self, _tgid: u32) -> anyhow::Result<()> {
         Ok(())
     }
 
-    fn kernel_symbolize(&self, addrs: &[u64]) -> anyhow::Result<Vec<blazesym::symbolize::Symbolized>> {
+    fn drop_symbolizer(&mut self, _tgid: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn symbolize_kernel(&self, addrs: &[u64]) -> anyhow::Result<Vec<blazesym::symbolize::Symbolized>> {
         let rst = addrs
             .iter()
             .map(|addr| match self.symbols.get(addr) {
@@ -103,8 +105,8 @@ impl Symbolizer for TestSymbolizer {
         Ok(rst)
     }
 
-    fn user_symbolize(&self, _pid: i32, addr: &[u64]) -> anyhow::Result<Vec<Symbolized>, anyhow::Error> {
-        self.kernel_symbolize(addr)
+    fn symbolize_process(&self, _tgid: u32, addr: &[u64]) -> anyhow::Result<Vec<Symbolized>> {
+        self.symbolize_kernel(addr)
     }
 }
 
@@ -128,7 +130,7 @@ fn resolved(frames: &HashMapFrames, symbolizer: &TestSymbolizer, addr: i32) -> V
         Ok(frames) => frames,
         Err(_) => return vec![],
     };
-    let symbols = match symbolizer.kernel_symbolize(&frames) {
+    let symbols = match symbolizer.symbolize_kernel(&frames) {
         Ok(symbols) => symbols,
         Err(_) => return vec![],
     };
