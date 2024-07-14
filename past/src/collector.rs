@@ -474,8 +474,7 @@ impl Symbolizer for BlazesymSymbolizer {
             None => {
                 // if process exits at the same time when batch is written we may lose several
                 // events that are emitted after receiving close event.
-                debug!("symbolizer for tgid={} was dropped before event is collected", tgid);
-                return Ok(vec![]);
+                anyhow::bail!("missing symbolizer for tgid={}", tgid);
             }
         };
         let rst = symbolizer.symbolize(
