@@ -1,6 +1,5 @@
 use std::{
     collections::HashSet,
-    io::Write,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -16,12 +15,12 @@ use libbpf_rs::{
     skel::{OpenSkel, SkelBuilder},
     MapFlags, RingBufferBuilder,
 };
-use tracing::{debug, error, info, info_span, instrument, level_filters::LevelFilter, warn};
+use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
 use crate::{
-    collector::{on_symbolize, BlazesymSymbolizer, Collector, Frames, Received, Symbolizer},
-    parquet::{Compression, GroupWriter},
+    collector::{BlazesymSymbolizer, Frames, Received, Symbolizer},
+    parquet::Compression,
     perf_event::perf_event_per_cpu,
     util::scan_proc,
 };
@@ -344,47 +343,4 @@ impl Frames for MapFrames<'_> {
 
 fn attach_perf_event(pefds: &[i32], prog: &mut libbpf_rs::Program) -> Vec<Result<libbpf_rs::Link, libbpf_rs::Error>> {
     pefds.iter().map(|pefd| prog.attach_perf_event(*pefd)).collect()
-}
-
-fn on_event<W: Write + Send>(
-    stack_writer: &mut GroupWriter<W>,
-    frames: &impl Frames,
-    collector: &mut Collector,
-    symbolizer: &mut impl Symbolizer,
-    buf: Received,
-) -> Result<()> {
-    match buf {
-        Received::Switch(event) => {
-            if event.kstack > 0 || event.ustack > 0 {
-                symbolizer.cache_tgid(event.tgid as i32).unwrap();
-            }
-        }
-        Received::PerfStack(event) => {
-            if event.kstack > 0 || event.ustack > 0 {
-                symbolizer.cache_tgid(event.tgid as i32).unwrap();
-            }
-        }
-        _ => {}
-    };
-    if let Err(err) = collector.collect(buf) {
-        warn!("failed to collect event: {:?}", err);
-    }
-    if collector.group.is_full() {
-        debug!("flushing stacks to disk");
-        symbolize(collector, frames, symbolizer)?;
-        flush_group(stack_writer, collector)?;
-        collector.group.reuse();
-        debug!("flushed stacks to disk");
-    }
-    Ok(())
-}
-
-#[instrument(skip_all)]
-fn flush_group<W: Write + Send>(stack_writer: &mut GroupWriter<W>, collector: &mut Collector) -> Result<()> {
-    stack_writer.write(&collector.group)
-}
-
-#[instrument(skip_all)]
-fn symbolize(collector: &mut Collector, stacks: &impl Frames, symbolizer: &mut impl Symbolizer) -> Result<()> {
-    on_symbolize(&mut collector.group, stacks, symbolizer)
 }

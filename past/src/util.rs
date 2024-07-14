@@ -73,7 +73,7 @@ pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
         let name = name.to_string_lossy();
         if let Ok(tgid) = name.parse::<u32>() {
             let comm = fs::read_to_string(path.join("comm"))?;
-            let trimmed= comm.trim();
+            let trimmed = comm.trim();
             if comms.contains(trimmed) {
                 rst.push(Proc {
                     tgid: tgid as i32,
@@ -86,11 +86,11 @@ pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
     Ok(rst)
 }
 
-pub fn create_file(dir: &Path, prefix: &str) -> Result<File> {
+pub(crate) fn create_file(dir: &Path, prefix: &str) -> Result<File> {
     Ok(File::create(dir.join(format!("{}.parquet", prefix)))?)
 }
 
-pub fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, index: usize) -> Result<()> {
+pub(crate) fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, index: usize) -> Result<()> {
     let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
     let from = dir.join(format!("{}.parquet", from_prefix));
     let to = dir.join(format!("{}-{}-{}.parquet", to_prefix, index, now));

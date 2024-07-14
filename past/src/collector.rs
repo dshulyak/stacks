@@ -9,7 +9,7 @@ use anyhow::Result;
 use blazesym::symbolize::{self, Input, Kernel, Process, Source, Symbolized};
 use bytes::{Bytes, BytesMut};
 use plain::Plain;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use crate::{
     parquet::{Event, Group, GroupWriter},
@@ -258,16 +258,6 @@ pub(crate) fn null_terminated(bytes: &[u8]) -> &[u8] {
     }
 }
 
-pub(crate) fn on_symbolize(
-    stack_group: &mut Group,
-    stacks: &impl Frames,
-    symbolizer: &mut impl Symbolizer,
-) -> Result<()> {
-    symbolize(symbolizer, stacks, stack_group);
-    stack_group.reuse_unresolved();
-    Ok(())
-}
-
 pub(crate) fn on_exit<W: Write + Send>(
     mut stack_writer: GroupWriter<W>,
     stack_group: &mut Group,
@@ -287,7 +277,7 @@ pub(crate) trait Frames {
     fn frames(&self, id: i32) -> Result<Vec<u64>>;
 }
 
-fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
+pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
     let mut addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
     let mut unique = HashSet::new();
@@ -310,7 +300,7 @@ fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &m
         })
         .collect();
     let req = unique.into_iter().collect::<Vec<_>>();
-    let symbols = match symbolizer.kernel_symbolize(&req) {
+    let symbols = match symbolizer.symbolize_kernel(&req) {
         Ok(syms) => syms,
         Err(err) => {
             debug!("symbolize: {}", err);
@@ -349,7 +339,7 @@ fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &m
 
     for (tgid, addrs) in unique {
         let req = addrs.into_iter().collect::<Vec<_>>();
-        let symbols = match symbolizer.user_symbolize(tgid, &req) {
+        let symbols = match symbolizer.symbolize_process(tgid as u32, &req) {
             Ok(syms) => syms,
             Err(err) => {
                 debug!("symbolize: tgid={} err={}", tgid, err);
@@ -418,75 +408,79 @@ fn to_symbols<'a>(
 pub(crate) trait Symbolizer {
     fn new() -> Self;
 
-    fn reset(&mut self);
+    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
 
-    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
+    fn init_symbolizer(&mut self, tgid: u32) -> Result<()>;
 
-    fn cache_tgid(&mut self, tgid: i32) -> Result<()>;
+    fn drop_symbolizer(&mut self, tgid: u32) -> Result<()>;
 
-    fn user_symbolize(&self, pid: i32, addr: &[u64]) -> Result<Vec<Symbolized>>;
+    fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>>;
 }
 
 pub(crate) struct BlazesymSymbolizer {
     // kernel_symbolizer can be reused for the whole lifetime of the program,
-    // technically it is exactly same object, but it will not cache any userspace files for symbolization
+    // technically it is exactly same object, but it will not cache any userspace files for symbolizations
     kernel_symbolizer: symbolize::Symbolizer,
-    symbolizer: symbolize::Symbolizer,
-    tried: HashSet<i32>,
+    // symbolizers for userspace data have to live until two events occur:
+    // - process exited
+    // - frames in the last batch are symbolized
+    // if we drop symbolizer immediately we will lose data from that process
+    symbolizers: HashMap<u32, symbolize::Symbolizer>,
 }
 
 impl Symbolizer for BlazesymSymbolizer {
     fn new() -> Self {
         Self {
             kernel_symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
-            symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
-            tried: HashSet::new(),
+            symbolizers: HashMap::new(),
         }
     }
 
-    fn reset(&mut self) {
-        self.symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
-        self.tried = HashSet::new();
-    }
-
-    fn kernel_symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
+    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
         let rst = self
             .kernel_symbolizer
             .symbolize(&Source::Kernel(Kernel::default()), Input::AbsAddr(addr))?;
         Ok(rst)
     }
 
-    fn cache_tgid(&mut self, tgid: i32) -> Result<()> {
-        if self.tried.contains(&tgid) {
-            return Ok(());
-        }
-        debug!("cache_tgid: symbolizing tgid={}", tgid);
-        self.tried.insert(tgid);
-        let rst = self.symbolizer.symbolize(
+    fn init_symbolizer(&mut self, tgid: u32) -> Result<()> {
+        debug!("instantiating symbolizer for tgid={}", tgid);
+        let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
+        if let Err(err) = symbolizer.symbolize(
             &Source::Process(Process {
-                pid: blazesym::Pid::Pid(NonZeroU32::new(tgid as u32).unwrap()),
+                pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
                 debug_syms: false,
                 perf_map: false,
                 map_files: true,
                 _non_exhaustive: (),
             }),
             Input::AbsAddr(&[]),
-        );
-        match rst {
-            Ok(_) => {
-                debug!("cache_tgid: success symbolized tgid={}", tgid);
-            }
-            Err(err) => {
-                debug!("cache_tgid: failure symbolized tgid={} err={}", tgid, err);
-            }
+        ) {
+            warn!("caching unsuccesful for tgid={} err={}", tgid, err);
         }
+        self.symbolizers.insert(tgid, symbolizer);
         Ok(())
     }
 
-    fn user_symbolize(&self, pid: i32, addr: &[u64]) -> Result<Vec<Symbolized>, anyhow::Error> {
-        let rst = self.symbolizer.symbolize(
+    fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
+        debug!("symbolizer for tgid={} can be dropped after symbolization", tgid);
+        self.symbolizers.remove(&tgid);
+        Ok(())
+    }
+
+    fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
+        let symbolizer = match self.symbolizers.get(&tgid) {
+            Some(symbolizer) => symbolizer,
+            None => {
+                // if process exits at the same time when batch is written we may lose several
+                // events that are emitted after receiving close event.
+                debug!("symbolizer for tgid={} was dropped before event is collected", tgid);
+                return Ok(vec![]);
+            }
+        };
+        let rst = symbolizer.symbolize(
             &Source::Process(Process {
-                pid: blazesym::Pid::Pid(NonZeroU32::new(pid as u32).unwrap()),
+                pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
                 debug_syms: true,
                 perf_map: false,
                 map_files: true,

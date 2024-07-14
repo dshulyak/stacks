@@ -1,10 +1,10 @@
-use std::{fs::File, path::PathBuf};
+use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
+use tracing::{instrument, warn};
 
 use crate::{
-    collector::{on_exit, Collector, Frames, Received, Symbolizer},
-    on_event,
+    collector::{on_exit, symbolize, Collector, Frames, Received, Symbolizer},
     parquet::{Compression, Group, GroupWriter},
     util::{create_file, move_file_with_timestamp},
 };
@@ -34,6 +34,8 @@ pub struct Program<Fr: Frames, Sym: Symbolizer> {
     collector: Collector,
     frames: Fr,
     symbolizer: Sym,
+    // cleanup should occur after frames from last batch were collected
+    symbolizer_tgid_cleanup: HashSet<u32>,
     stats: Stats,
 }
 
@@ -60,6 +62,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             collector,
             frames,
             symbolizer,
+            symbolizer_tgid_cleanup: HashSet::new(),
             stats,
         })
     }
@@ -68,20 +71,30 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         // TODO i need to adjust stats based on response from on_event
         // this is hotfix for ci
         match event {
-            Received::TraceEnter(_) | Received::ProcessExec(_) | Received::ProcessExit(_) | Received::Unknown(_) => {}
+            Received::ProcessExec(event) => {
+                self.symbolizer.init_symbolizer(event.tgid)?;
+            }
+            Received::ProcessExit(event) => {
+                self.symbolizer_tgid_cleanup.insert(event.tgid);
+            }
+            Received::TraceEnter(_) | Received::Unknown(_) => {}
             Received::Switch(_) | Received::TraceExit(_) | Received::PerfStack(_) | Received::TraceClose(_) => {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
         }
-        on_event(
-            self.writer.as_mut().expect("writer should be present"),
-            &self.frames,
-            &mut self.collector,
-            &mut self.symbolizer,
-            event,
-        )
-        .context("on event")?;
+
+        if let Err(err) = self.collector.collect(event) {
+            warn!("failed to collect event: {:?}", err);
+        }
+        if self.collector.group.is_full() {
+            symbolize_batch(&mut self.collector, &self.frames, &mut self.symbolizer).context("symbolize batch")?;
+            flush_batch(self.writer.as_mut().expect("writer must exist"), &mut self.collector)?;
+            self.collector.group.reuse();
+            for tgid in self.symbolizer_tgid_cleanup.drain() {
+                self.symbolizer.drop_symbolizer(tgid)?;
+            }
+        }
 
         if self.stats.rows_in_current_file == self.cfg.rows_per_group * self.cfg.groups_per_file {
             on_exit(
@@ -100,12 +113,6 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
 
             let file = create_file(&self.cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
             self.writer = Some(GroupWriter::with_compression(file, self.cfg.compression)?);
-
-            // there is no eviction in symbolizer
-            // hence i reset it, otherwise it will grow with every new discovered process
-            //
-            // no particular reason to reset symbolizer when file is switched
-            self.symbolizer.reset();
 
             self.stats.current_file_index += 1;
             self.stats.rows_in_current_file = 0;
@@ -126,4 +133,16 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         }
         Ok(())
     }
+}
+
+#[instrument(skip_all)]
+fn flush_batch<W: Write + Send>(stack_writer: &mut GroupWriter<W>, collector: &mut Collector) -> Result<()> {
+    stack_writer.write(&collector.group)
+}
+
+#[instrument(skip_all)]
+fn symbolize_batch(collector: &mut Collector, stacks: &impl Frames, symbolizer: &mut impl Symbolizer) -> Result<()> {
+    symbolize(symbolizer, stacks, &mut collector.group);
+    collector.group.reuse_unresolved();
+    Ok(())
 }
