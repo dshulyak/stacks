@@ -259,7 +259,7 @@ impl ReferenceStateMachine for RefSystem {
             return Just(Op::Wait).boxed();
         }
         let virtual_id = state.completed.len() as u32 + state.running.len() as u32;
-        let locker = (10..100u64).prop_map(move |millis| {
+        let locker = (100..200u64).prop_map(move |millis| {
             let locker = Locker::new(Duration::from_millis(millis));
             Op::Run(Process {
                 virtual_id,

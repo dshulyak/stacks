@@ -12,6 +12,7 @@ use parquet::{
     format::SortingColumn,
     schema::{parser::parse_message_type, types},
 };
+use tracing::instrument;
 
 pub enum EventKind {
     // Perf collected from sampling process
@@ -362,11 +363,6 @@ impl Group {
         self.unresolved_kstack.iter().copied()
     }
 
-    pub(crate) fn reuse_unresolved(&mut self) {
-        self.unresolved_ustack.clear();
-        self.unresolved_kstack.clear();
-    }
-
     pub(crate) fn resolve(&mut self, ustacks: impl Iterator<Item = Bytes>, kstacks: impl Iterator<Item = Bytes>) {
         let mut rep_level = 0;
         for stack in ustacks {
@@ -417,6 +413,7 @@ impl<W: Write + Send> GroupWriter<W> {
         Ok(Self(writer))
     }
 
+    #[instrument(skip_all)]
     pub(crate) fn write(&mut self, group: &Group) -> Result<()> {
         let mut rows = self.0.next_row_group()?;
         let mut timestamp = rows.next_column()?.expect("timestamp column");
