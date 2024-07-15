@@ -9,7 +9,6 @@ use std::{
 
 use anyhow::Result;
 use bytes::Bytes;
-use tracing::debug;
 
 use crate::collector::null_terminated;
 
@@ -64,7 +63,7 @@ pub(crate) struct Proc {
     pub(crate) comm: Comm,
 }
 
-pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
+pub fn scan_proc(comms: &HashSet<&str>) -> Result<Vec<Proc>> {
     let mut rst = vec![];
     for entry in fs::read_dir("/proc")? {
         let entry = entry?;
@@ -82,7 +81,6 @@ pub fn scan_proc(comms: HashSet<&str>) -> anyhow::Result<Vec<Proc>> {
                     tgid: tgid as i32,
                     comm: Comm::from(trimmed),
                 });
-                debug!("discovered tgid = {} for command = {}", tgid, comm);
             }
         }
     }

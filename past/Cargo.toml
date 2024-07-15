@@ -29,6 +29,7 @@ humantime = "2.1"
 bytemuck = "1.16.1"
 bytes = "1.6.0"
 parquet = "52.0.0"
+thiserror = "1.0.62"
 
 [dev-dependencies]
 proptest = "1.4.0"
