@@ -17,6 +17,10 @@
 #define TYPE_PROCESS_EXIT_EVENT 5
 #define TYPE_PROCESS_EXEC_EVENT 6
 
+enum errors {
+    DROPPED_EVENTS
+};
+
 struct switch_event
 {
     __u8 type;

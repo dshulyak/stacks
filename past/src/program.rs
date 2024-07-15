@@ -73,7 +73,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         match event {
             Received::ProcessExec(event) => {
                 if let Err(err) = self.symbolizer.init_symbolizer(event.tgid) {
-                    warn!("failed to init symbolizer: {:?}", err);
+                    warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
                 }
             }
             Received::ProcessExit(event) => {

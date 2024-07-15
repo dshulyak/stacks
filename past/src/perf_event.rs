@@ -3,14 +3,18 @@ use std::{io, mem};
 use libbpf_rs::libbpf_sys::{perf_event_attr, PERF_SAMPLE_RAW};
 use libc::{self, SYS_perf_event_open};
 
-pub fn perf_event_per_cpu(type_: u32, config: u32, freq: u64) -> Result<Vec<i32>, io::Error> {
+pub(crate) fn attach_perf_event(pefds: &[i32], prog: &mut libbpf_rs::Program) -> Vec<Result<libbpf_rs::Link, libbpf_rs::Error>> {
+    pefds.iter().map(|pefd| prog.attach_perf_event(*pefd)).collect()
+}
+
+pub(crate) fn perf_event_per_cpu(type_: u32, config: u32, freq: u64) -> Result<Vec<i32>, io::Error> {
     let nprocs = libbpf_rs::num_possible_cpus().unwrap();
     (0..nprocs)
         .map(|cpu| perf_event_open(type_, config, 0, Some(freq), -1, cpu as i32, 0))
         .collect()
 }
 
-pub fn perf_event_open(
+pub(crate) fn perf_event_open(
     type_: u32,
     config: u32,
     period: u64,
