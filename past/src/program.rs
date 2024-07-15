@@ -72,7 +72,9 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         // this is hotfix for ci
         match event {
             Received::ProcessExec(event) => {
-                self.symbolizer.init_symbolizer(event.tgid)?;
+                if let Err(err) = self.symbolizer.init_symbolizer(event.tgid) {
+                    warn!("failed to init symbolizer: {:?}", err);
+                }
             }
             Received::ProcessExit(event) => {
                 self.symbolizer_tgid_cleanup.insert(event.tgid);

@@ -97,3 +97,11 @@ pub(crate) fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix:
     fs::rename(from, to)?;
     Ok(())
 }
+
+pub(crate) fn exe_name_and_change_time(tgid: u32) -> Result<(String, u64)> {
+    let path = format!("/proc/{}/exe", tgid);
+    let exe = fs::read_link(path)?;
+    let meta = exe.metadata()?;
+    let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    Ok((exe.to_string_lossy().to_string(), mtime))
+}
