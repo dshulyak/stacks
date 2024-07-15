@@ -1,3 +1,4 @@
+use core::time;
 use std::{
     collections::HashSet,
     path::PathBuf,
@@ -273,7 +274,7 @@ fn main() -> Result<()> {
     let comms = opt.commands.iter().map(|c| c.as_str()).collect::<HashSet<_>>();
     // scan /proc after bpf prograns are attached
     // to be sure that target comm is discovered either from proc or if it was exec'ed
-    let procs = scan_proc(comms)?;
+    let procs = scan_proc(&comms)?;
     for proc in procs.iter() {
         let mut maps = skel.maps_mut();
         maps.filter_tgid()
@@ -302,41 +303,81 @@ fn main() -> Result<()> {
         };
         program.on_event(Received::ProcessExec(&fake_exec_event))?;
     }
-    {
-        let mut builder = RingBufferBuilder::new();
 
-        builder.add(maps.events(), |buf: &[u8]| {
-            if let Err(err) = program.on_event(buf.into()) {
-                error!("failed to process event: {:?}", err);
-                1
-            } else {
-                0
-            }
-        })?;
-
-        let mgr = builder.build().unwrap();
-        let interval = opt.poll.into();
-        let consume = info_span!("consume");
-        let mut dropped_counter = 0;
-        while interrupt.load(Ordering::Relaxed) {
-            consume.in_scope(|| {
-                if let Err(err) = mgr.consume() {
-                    warn!("consume from ring buffer: {:?}", err);
+    let mut dropped_counter = 0;
+    let sleep_interval = opt.poll.into();
+    loop {
+        match consume_events(&mut program, &maps, &mut dropped_counter, &interrupt, sleep_interval) {
+            Ok(_) => break,
+            Err(ErrorConsume::DroppedEvents(dropped)) => {
+                warn!("program missed events {}. will need to reinitialize state", dropped);
+                let span = info_span!("reinitialize");
+                let _guard = span.enter();
+                program.drop_known_state()?;
+                let scanned = scan_proc(&comms)?;
+                for comm in scanned {
+                    let fake_exec_event = past_types::process_exec_event {
+                        timestamp: uptime.as_nanos() as u64,
+                        tgid: comm.tgid as u32,
+                        comm: *comm.comm,
+                        ..Default::default()
+                    };
+                    program.on_event(Received::ProcessExec(&fake_exec_event))?;
                 }
-            });
-            let updated_dropped_counter = count_dropped_events(maps.errors_counter())?;
-            if updated_dropped_counter > dropped_counter {
-                warn!(
-                    "ringbuf capacity can't handle events rate. dropped events since previous {}",
-                    updated_dropped_counter - dropped_counter
-                );
-                dropped_counter = updated_dropped_counter;
             }
-            sleep(interval);
+            Err(err) => {
+                error!("consume events: {:?}", err);
+                break;
+            }
         }
     }
     info!("trace interrupted, flushing pending data to file and exiting");
     program.exit()
+}
+
+#[derive(thiserror::Error, Debug)]
+enum ErrorConsume {
+    #[error("ringbuf capacity can't handle events rate. dropped events since previous {0}")]
+    DroppedEvents(u64),
+    #[error(transparent)]
+    LibbpfError(#[from] libbpf_rs::Error),
+}
+
+fn consume_events<Fr: Frames, Sym: Symbolizer>(
+    program: &mut program::Program<Fr, Sym>,
+    maps: &PastMaps,
+    dropped_counter: &mut u64,
+    interrupt: &Arc<AtomicBool>,
+    sleep_interval: time::Duration,
+) -> Result<(), ErrorConsume> {
+    let mut builder = RingBufferBuilder::new();
+    builder.add(maps.events(), |buf: &[u8]| {
+        if let Err(err) = program.on_event(buf.into()) {
+            error!("failed to process event: {:?}", err);
+            1
+        } else {
+            0
+        }
+    })?;
+    let mgr = builder.build().unwrap();
+    let consume = info_span!("consume");
+    loop {
+        consume.in_scope(|| {
+            if let Err(err) = mgr.consume() {
+                warn!("consume from ring buffer: {:?}", err);
+            }
+        });
+        if !interrupt.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let updated_dropped_counter = count_dropped_events(maps.errors_counter())?;
+        if updated_dropped_counter > *dropped_counter {
+            let delta = updated_dropped_counter - *dropped_counter;
+            *dropped_counter = updated_dropped_counter;
+            return Err(ErrorConsume::DroppedEvents(delta));
+        }
+        sleep(sleep_interval);
+    }
 }
 
 struct MapFrames<'a>(&'a libbpf_rs::Map);
@@ -361,13 +402,13 @@ impl Frames for MapFrames<'_> {
 // i need to lookup how to generate bindings for enums
 const DROPPED_EVENTS: u32 = 0;
 
-fn count_dropped_events(errors_counter: &libbpf_rs::Map) -> Result<u64> {
+fn count_dropped_events(errors_counter: &libbpf_rs::Map) -> Result<u64, libbpf_rs::Error> {
     let key = DROPPED_EVENTS.to_ne_bytes();
     let rst = errors_counter.lookup_percpu(&key, MapFlags::empty())?;
     if let Some(rst) = rst {
         let mut sum = 0;
         for cpu in rst.iter() {
-            sum += u64::from_ne_bytes(cpu.as_slice().try_into()?);
+            sum += u64::from_ne_bytes(cpu.as_slice().try_into().expect("events counter must be 8 bytes long"));
         }
         Ok(sum)
     } else {

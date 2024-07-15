@@ -84,6 +84,10 @@ impl Collector {
         }
     }
 
+    pub(crate) fn drop_known_spans(&mut self) {
+        self.tgid_span_id_pid_to_enter.clear();
+    }
+
     pub(crate) fn collect(&mut self, tgid_to_command: &HashMap<u32, Bytes>, event: Received) -> Result<()> {
         // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
@@ -251,7 +255,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
     let mut unique = HashSet::new();
     let traces: HashMap<i32, Result<Vec<u64>>> = kstacks
         .into_iter()
-        .filter(|&stack_id| stack_id > 0)
+        .filter(|&stack_id| stack_id >= 0)
         .map(|stack_id| {
             let trace = stacks.frames(stack_id);
             match &trace {
@@ -289,7 +293,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
     }
     let mut unique = HashMap::new();
     for (tgid, ustack) in ustacks.into_iter() {
-        for stack_id in ustack.into_iter().filter(|&stack_id| stack_id > 0) {
+        for stack_id in ustack.into_iter().filter(|&stack_id| stack_id >= 0) {
             let trace = stacks.frames(stack_id);
             match &trace {
                 Ok(trace) => {

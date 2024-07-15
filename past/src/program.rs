@@ -1,4 +1,9 @@
-use std::{collections::{HashMap, HashSet}, fs::File, io::Write, path::PathBuf};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::Write,
+    path::PathBuf,
+};
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
@@ -48,7 +53,7 @@ const PENDING_FILE_PREFIX: &str = "PENDING";
 const FILE_PREFIX: &str = "STACKS";
 
 impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
-    pub fn new(cfg: Config, frames: Fr, symbolizer: Sym) -> Result<Self> {
+    pub(crate) fn new(cfg: Config, frames: Fr, symbolizer: Sym) -> Result<Self> {
         let stats = Stats {
             rows_in_current_file: 0,
             total_rows: 0,
@@ -70,12 +75,22 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         })
     }
 
-    pub fn on_event(&mut self, event: Received) -> Result<()> {
+    pub(crate) fn drop_known_state(&mut self) -> Result<()> {
+        for tgid in self.tgid_to_command.keys() {
+            self.symbolizer.drop_symbolizer(*tgid)?;
+        }
+        self.collector.drop_known_spans();
+        self.tgid_to_command.clear();
+        self.symbolizer_tgid_cleanup.clear();
+        Ok(())
+    }
+
+    pub(crate) fn on_event(&mut self, event: Received) -> Result<()> {
         // TODO i need to adjust stats based on response from on_event
         // this is hotfix for ci
         match event {
             Received::ProcessExec(event) => {
-                _= command(&mut self.tgid_to_command, event.tgid, event.comm.as_slice());
+                _ = command(&mut self.tgid_to_command, event.tgid, event.comm.as_slice());
                 if let Err(err) = self.symbolizer.init_symbolizer(event.tgid) {
                     warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
                 }
@@ -130,8 +145,8 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         Ok(())
     }
 
-    pub fn exit(mut self) -> Result<()> {
-        if let Some(writer) = self.writer {
+    pub(crate) fn exit(&mut self) -> Result<()> {
+        if let Some(writer) = self.writer.take() {
             on_exit(writer, &mut self.collector.group, &self.symbolizer, &self.frames).context("closing last file")?;
             move_file_with_timestamp(
                 &self.cfg.directory,
