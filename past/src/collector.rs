@@ -1,5 +1,5 @@
 use std::{
-    collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
+    collections::{btree_map, BTreeMap, HashMap, HashSet},
     iter::empty,
     num::NonZeroU32,
     rc::Rc,
@@ -72,7 +72,6 @@ struct SpanEnter {
 }
 
 pub(crate) struct Collector {
-    tgid_to_command: HashMap<u32, Bytes>,
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
     pub group: Group,
 }
@@ -80,20 +79,19 @@ pub(crate) struct Collector {
 impl Collector {
     pub(crate) fn new(group: Group) -> Self {
         Self {
-            tgid_to_command: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
             group,
         }
     }
 
-    pub(crate) fn collect(&mut self, event: Received) -> Result<()> {
-        // all integers are cast to a signed form because of the API provided by rust parquet lib
+    pub(crate) fn collect(&mut self, tgid_to_command: &HashMap<u32, Bytes>, event: Received) -> Result<()> {
+        // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
 
         match event {
             Received::Switch(event) => {
-                let command = match self.tgid_to_command.get(&event.tgid) {
+                let command = match tgid_to_command.get(&event.tgid) {
                     Some(command) => command,
                     None => {
                         anyhow::bail!("missing command for pid {}", event.tgid);
@@ -112,7 +110,7 @@ impl Collector {
             }
             Received::PerfStack(event) => {
                 if event.ustack > 0 || event.kstack > 0 {
-                    let command = match self.tgid_to_command.get(&event.tgid) {
+                    let command = match tgid_to_command.get(&event.tgid) {
                         Some(command) => command,
                         None => {
                             anyhow::bail!("missing command for pid {}", event.tgid);
@@ -151,7 +149,7 @@ impl Collector {
                 };
             }
             Received::TraceExit(event) => {
-                let command = match self.tgid_to_command.get(&event.tgid) {
+                let command = match tgid_to_command.get(&event.tgid) {
                     Some(command) => command,
                     None => {
                         anyhow::bail!("missing command for pid {}", event.tgid);
@@ -188,7 +186,7 @@ impl Collector {
                     .range((event.tgid, event.span_id, 0)..(event.tgid, event.span_id, u32::MAX))
                     .map(|(k, _)| k.2)
                     .collect::<Vec<_>>();
-                let command = self.tgid_to_command.get(&pids[0]);
+                let command = tgid_to_command.get(&pids[0]);
                 for (i, pid) in pids.into_iter().enumerate() {
                     let span = match self.tgid_span_id_pid_to_enter.remove(&(event.tgid, event.span_id, pid)) {
                         Some(span) => span,
@@ -216,11 +214,8 @@ impl Collector {
                     }
                 }
             }
-            Received::ProcessExec(event) => {
-                let _ = command(&mut self.tgid_to_command, event.tgid, &event.comm);
-            }
+            Received::ProcessExec(_) => {}
             Received::ProcessExit(event) => {
-                self.tgid_to_command.remove(&event.tgid);
                 let entries = self
                     .tgid_span_id_pid_to_enter
                     .range((event.tgid, 0, 0)..(event.tgid, u64::MAX, u32::MAX))
@@ -235,20 +230,6 @@ impl Collector {
             }
         }
         Ok(())
-    }
-}
-
-fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[u8]) -> Bytes {
-    let comm = null_terminated(command);
-    let existing = commands.entry(tgid);
-    match existing {
-        hash_map::Entry::Vacant(vacant) => vacant.insert(Bytes::copy_from_slice(comm)).clone(),
-        hash_map::Entry::Occupied(mut occupied) => {
-            if occupied.get() != comm {
-                occupied.insert(Bytes::copy_from_slice(comm));
-            }
-            occupied.get().clone()
-        }
     }
 }
 

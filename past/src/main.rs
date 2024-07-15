@@ -317,20 +317,20 @@ fn main() -> Result<()> {
         let mgr = builder.build().unwrap();
         let interval = opt.poll.into();
         let consume = info_span!("consume");
-        let mut dropped = 0;
+        let mut dropped_counter = 0;
         while interrupt.load(Ordering::Relaxed) {
             consume.in_scope(|| {
                 if let Err(err) = mgr.consume() {
                     warn!("consume from ring buffer: {:?}", err);
                 }
             });
-            let dropped_update = count_dropped_events(maps.errors_counter())?;
-            if dropped_update > dropped {
+            let updated_dropped_counter = count_dropped_events(maps.errors_counter())?;
+            if updated_dropped_counter > dropped_counter {
                 warn!(
                     "ringbuf capacity can't handle events rate. dropped events since previous {}",
-                    dropped_update - dropped
+                    updated_dropped_counter - dropped_counter
                 );
-                dropped = dropped_update;
+                dropped_counter = updated_dropped_counter;
             }
             sleep(interval);
         }

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{hash_map, HashMap, HashSet},
     fs::{self, File},
     io::Read,
     ops::Deref,
@@ -8,7 +8,10 @@ use std::{
 };
 
 use anyhow::Result;
+use bytes::Bytes;
 use tracing::debug;
+
+use crate::collector::null_terminated;
 
 pub fn ensure_exists(dir: &Path) -> anyhow::Result<()> {
     if !dir.exists() {
@@ -104,4 +107,18 @@ pub(crate) fn exe_name_and_change_time(tgid: u32) -> Result<(String, u64)> {
     let meta = exe.metadata()?;
     let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
     Ok((exe.to_string_lossy().to_string(), mtime))
+}
+
+pub(crate) fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[u8]) -> Bytes {
+    let comm = null_terminated(command);
+    let existing = commands.entry(tgid);
+    match existing {
+        hash_map::Entry::Vacant(vacant) => vacant.insert(Bytes::copy_from_slice(comm)).clone(),
+        hash_map::Entry::Occupied(mut occupied) => {
+            if occupied.get() != comm {
+                occupied.insert(Bytes::copy_from_slice(comm));
+            }
+            occupied.get().clone()
+        }
+    }
 }

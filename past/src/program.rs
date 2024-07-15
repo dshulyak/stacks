@@ -1,12 +1,13 @@
-use std::{collections::HashSet, fs::File, io::Write, path::PathBuf};
+use std::{collections::{HashMap, HashSet}, fs::File, io::Write, path::PathBuf};
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use tracing::{debug, warn};
 
 use crate::{
     collector::{symbolize, Collector, Frames, Received, Symbolizer},
     parquet::{Compression, Group, GroupWriter},
-    util::{create_file, move_file_with_timestamp},
+    util::{command, create_file, move_file_with_timestamp},
 };
 
 #[derive(Debug)]
@@ -36,6 +37,7 @@ pub struct Program<Fr: Frames, Sym: Symbolizer> {
     symbolizer: Sym,
     // cleanup should occur after frames from last batch were collected
     symbolizer_tgid_cleanup: HashSet<u32>,
+    tgid_to_command: HashMap<u32, Bytes>,
     stats: Stats,
 }
 
@@ -63,6 +65,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             frames,
             symbolizer,
             symbolizer_tgid_cleanup: HashSet::new(),
+            tgid_to_command: HashMap::new(),
             stats,
         })
     }
@@ -72,6 +75,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         // this is hotfix for ci
         match event {
             Received::ProcessExec(event) => {
+                _= command(&mut self.tgid_to_command, event.tgid, event.comm.as_slice());
                 if let Err(err) = self.symbolizer.init_symbolizer(event.tgid) {
                     warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
                 }
@@ -86,7 +90,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             }
         }
 
-        if let Err(err) = self.collector.collect(event) {
+        if let Err(err) = self.collector.collect(&self.tgid_to_command, event) {
             warn!("failed to collect event: {:?}", err);
         }
         if self.collector.group.is_full() {
