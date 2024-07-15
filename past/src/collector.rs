@@ -2,6 +2,7 @@ use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
     iter::empty,
     num::NonZeroU32,
+    rc::Rc,
 };
 
 use anyhow::Result;
@@ -13,6 +14,7 @@ use tracing::{debug, instrument, warn};
 use crate::{
     parquet::{Event, Group},
     past::past_types,
+    util::exe_name_and_change_time,
 };
 
 unsafe impl Plain for past_types::switch_event {}
@@ -402,22 +404,32 @@ pub(crate) trait Symbolizer {
     fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>>;
 }
 
+#[derive(Debug)]
+struct ExecutableSymbolizer {
+    symbolizer: symbolize::Symbolizer,
+    exe: String,
+    mtime: u64,
+}
+
 pub(crate) struct BlazesymSymbolizer {
     // kernel_symbolizer can be reused for the whole lifetime of the program,
-    // technically it is exactly same object, but it will not cache any userspace files for symbolizations
+    // technically it is exactly same object as any other symbolizer, but it will not cache any userspace files for
+    // symbolizations
     kernel_symbolizer: symbolize::Symbolizer,
-    // symbolizers for userspace data have to live until two events occur:
-    // - process exited
-    // - frames in the last batch are symbolized
+    // symbolizers for userspace data have to live until:
+    // - all processes that use referenced executable exited
+    // - last batch of frames is symbolized after last process exited
     // if we drop symbolizer immediately we will lose data from that process
-    symbolizers: HashMap<u32, symbolize::Symbolizer>,
+    executable_symbolizers: HashMap<(String, u64), Rc<ExecutableSymbolizer>>,
+    process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
 }
 
 impl Symbolizer for BlazesymSymbolizer {
     fn new() -> Self {
         Self {
             kernel_symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
-            symbolizers: HashMap::new(),
+            executable_symbolizers: HashMap::new(),
+            process_symbolizers: HashMap::new(),
         }
     }
 
@@ -429,8 +441,22 @@ impl Symbolizer for BlazesymSymbolizer {
     }
 
     fn init_symbolizer(&mut self, tgid: u32) -> Result<()> {
-        let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
-        if let Err(err) = symbolizer.symbolize(
+        let (exe, mtime) = exe_name_and_change_time(tgid)?;
+        if let Some(symboliser) = self.executable_symbolizers.get(&(exe.clone(), mtime)) {
+            self.process_symbolizers.insert(tgid, symboliser.clone());
+            return Ok(());
+        } else {
+            let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
+            let symboliser = Rc::new(ExecutableSymbolizer {
+                symbolizer,
+                exe: exe.clone(),
+                mtime,
+            });
+            self.executable_symbolizers.insert((exe, mtime), symboliser.clone());
+            self.process_symbolizers.insert(tgid, symboliser);
+        }
+        let symbolizer = self.process_symbolizers.get(&tgid).unwrap();
+        if let Err(err) = symbolizer.symbolizer.symbolize(
             &Source::Process(Process {
                 pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
                 debug_syms: false,
@@ -442,19 +468,23 @@ impl Symbolizer for BlazesymSymbolizer {
         ) {
             debug!("caching unsuccesful for tgid={} err={}", tgid, err);
         }
-        self.symbolizers.insert(tgid, symbolizer);
         Ok(())
     }
 
     fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
         debug!("symbolizer for tgid={} can be dropped after symbolization", tgid);
-        self.symbolizers.remove(&tgid);
+        if let Some(symbolizer) = self.process_symbolizers.remove(&tgid) {
+            if Rc::strong_count(&symbolizer) == 1 {
+                self.executable_symbolizers
+                    .remove(&(symbolizer.exe.clone(), symbolizer.mtime));
+            }
+        }
         Ok(())
     }
 
     fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
-        let symbolizer = match self.symbolizers.get(&tgid) {
-            Some(symbolizer) => symbolizer,
+        let symbolizer = match self.process_symbolizers.get(&tgid) {
+            Some(symbolizer) => &symbolizer.symbolizer,
             None => {
                 // if process exits at the same time when batch is written we may lose several
                 // events that are emitted after receiving close event.
