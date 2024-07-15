@@ -42,11 +42,46 @@ const volatile struct
             bpf_printk(fmt, ##__VA_ARGS__); \
     })
 
+
+struct 
+{
+    __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+    __uint(key_size, sizeof(u32));
+    __uint(value_size, sizeof(u64));
+    __uint(max_entries, DROPPED_EVENTS + 1);
+} errors_counter SEC(".maps");
+
+
+__always_inline void inc_dropped()
+{
+    u32 key = DROPPED_EVENTS;
+    u64 *val = bpf_map_lookup_elem(&errors_counter, &key);
+    if (val)
+    {
+        *val += 1;
+    }
+    else
+    {
+        u64 one = 1;
+        bpf_map_update_elem(&errors_counter, &key, &one, BPF_ANY);
+    }
+}
+
 struct
 {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 64 * 1024 * 1024);
 } events SEC(".maps");
+
+static __always_inline void *reserve_event(__u64 size)
+{
+    void *event = bpf_ringbuf_reserve(&events, size, 0);
+    if (!event)
+    {
+        inc_dropped();
+    }
+    return event;
+}
 
 struct
 {
@@ -179,7 +214,7 @@ int handle__sched_switch(u64 *ctx)
     {
         return 0;
     }
-    struct switch_event *event = bpf_ringbuf_reserve(&events, sizeof(struct switch_event), 0);
+    struct switch_event *event = reserve_event(sizeof(struct switch_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping switch event\n");
@@ -225,7 +260,7 @@ int handle__perf_event(void *ctx)
     {
         return 0;
     }
-    struct perf_cpu_event *event = bpf_ringbuf_reserve(&events, sizeof(struct perf_cpu_event), 0);
+    struct perf_cpu_event *event = reserve_event(sizeof(struct perf_cpu_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping perf event\n");
@@ -269,7 +304,7 @@ int handle__sched_process_exit(u64 *ctx)
         return 0;
     }
     bpf_map_delete_elem(&filter_tgid, &tgid);
-    struct process_exit_event *event = bpf_ringbuf_reserve(&events, sizeof(struct process_exit_event), 0);
+    struct process_exit_event *event = reserve_event(sizeof(struct process_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping process exit event\n");
@@ -293,7 +328,7 @@ int handle__sched_process_exec(u64 *ctx)
     {
         return 0;
     }
-    struct process_exec_event *event = bpf_ringbuf_reserve(&events, sizeof(struct process_exec_event), 0);
+    struct process_exec_event *event = reserve_event(sizeof(struct process_exec_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping process exec event\n");
@@ -316,7 +351,7 @@ int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 work_id, u
     {
         return 0;
     }
-    struct tracing_enter_event *event = bpf_ringbuf_reserve(&events, sizeof(struct tracing_enter_event), 0);
+    struct tracing_enter_event *event = reserve_event(sizeof(struct tracing_enter_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing enter event\n");
@@ -345,7 +380,7 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
     {
         return 0;
     }
-    struct tracing_exit_event *event = bpf_ringbuf_reserve(&events, sizeof(struct tracing_exit_event), 0);
+    struct tracing_exit_event *event = reserve_event(sizeof(struct tracing_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing exit event\n");
@@ -372,7 +407,7 @@ int BPF_USDT(past_tracing_exit_stack, u64 span_id)
     {
         return 0;
     }
-    struct tracing_exit_event *event = bpf_ringbuf_reserve(&events, sizeof(struct tracing_exit_event), 0);
+    struct tracing_exit_event *event = reserve_event(sizeof(struct tracing_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing exit event\n");
@@ -399,7 +434,7 @@ int BPF_USDT(past_tracing_close, u64 span_id)
     {
         return 0;
     }
-    struct tracing_close_event *event = bpf_ringbuf_reserve(&events, sizeof(struct tracing_close_event), 0);
+    struct tracing_close_event *event = reserve_event(sizeof(struct tracing_close_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing close event\n");

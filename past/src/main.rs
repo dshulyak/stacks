@@ -21,7 +21,7 @@ use tracing_subscriber::{prelude::*, Registry};
 use crate::{
     collector::{BlazesymSymbolizer, Frames, Received, Symbolizer},
     parquet::Compression,
-    perf_event::perf_event_per_cpu,
+    perf_event::{attach_perf_event, perf_event_per_cpu},
     util::scan_proc,
 };
 
@@ -149,7 +149,13 @@ fn main() -> Result<()> {
                     .from_env_lossy(),
             ),
         )
-        .with(tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::from_default_env()));
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(
+                tracing_subscriber::EnvFilter::builder()
+                    .with_default_directive(LevelFilter::WARN.into())
+                    .from_env_lossy(),
+            ),
+        );
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global default subscriber");
 
     let interrupt = Arc::new(AtomicBool::new(true));
@@ -298,6 +304,7 @@ fn main() -> Result<()> {
     }
     {
         let mut builder = RingBufferBuilder::new();
+
         builder.add(maps.events(), |buf: &[u8]| {
             if let Err(err) = program.on_event(buf.into()) {
                 error!("failed to process event: {:?}", err);
@@ -310,12 +317,21 @@ fn main() -> Result<()> {
         let mgr = builder.build().unwrap();
         let interval = opt.poll.into();
         let consume = info_span!("consume");
+        let mut dropped = 0;
         while interrupt.load(Ordering::Relaxed) {
             consume.in_scope(|| {
                 if let Err(err) = mgr.consume() {
                     warn!("consume from ring buffer: {:?}", err);
                 }
             });
+            let dropped_update = count_dropped_events(maps.errors_counter())?;
+            if dropped_update > dropped {
+                warn!(
+                    "ringbuf capacity can't handle events rate. dropped events since previous {}",
+                    dropped_update - dropped
+                );
+                dropped = dropped_update;
+            }
             sleep(interval);
         }
     }
@@ -341,6 +357,20 @@ impl Frames for MapFrames<'_> {
     }
 }
 
-fn attach_perf_event(pefds: &[i32], prog: &mut libbpf_rs::Program) -> Vec<Result<libbpf_rs::Link, libbpf_rs::Error>> {
-    pefds.iter().map(|pefd| prog.attach_perf_event(*pefd)).collect()
+// this value must match enum in  past/src/bpf/past.h
+// i need to lookup how to generate bindings for enums
+const DROPPED_EVENTS: u32 = 0;
+
+fn count_dropped_events(errors_counter: &libbpf_rs::Map) -> Result<u64> {
+    let key = DROPPED_EVENTS.to_ne_bytes();
+    let rst = errors_counter.lookup_percpu(&key, MapFlags::empty())?;
+    if let Some(rst) = rst {
+        let mut sum = 0;
+        for cpu in rst.iter() {
+            sum += u64::from_ne_bytes(cpu.as_slice().try_into()?);
+        }
+        Ok(sum)
+    } else {
+        Ok(0)
+    }
 }
