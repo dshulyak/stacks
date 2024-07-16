@@ -368,7 +368,7 @@ impl StateMachineTest for TestState {
                 seen_counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             }
         }
-        sut.program.exit().expect("succesfully exited");
+        sut.program.exit_current_file().expect("succesfully exited");
         ref_state.persist();
 
         let rt = Runtime::new().unwrap();

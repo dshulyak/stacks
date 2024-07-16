@@ -332,7 +332,7 @@ fn main() -> Result<()> {
         }
     }
     info!("trace interrupted, flushing pending data to file and exiting");
-    program.exit()
+    program.exit_current_file()
 }
 
 #[derive(thiserror::Error, Debug)]
