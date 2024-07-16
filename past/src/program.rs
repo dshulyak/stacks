@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     collector::{symbolize, Collector, Frames, Received, Symbolizer},
@@ -32,6 +32,7 @@ pub struct Stats {
     pub rows_in_current_file: usize,
     pub total_rows: usize,
     pub current_file_index: usize,
+    pub missing_stacks_counter: HashMap<i32, usize>,
 }
 
 pub struct Program<Fr: Frames, Sym: Symbolizer> {
@@ -58,6 +59,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             rows_in_current_file: 0,
             total_rows: 0,
             current_file_index: 0,
+            missing_stacks_counter: HashMap::new(),
         };
         let f = create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
         let writer = GroupWriter::with_compression(f, cfg.compression)?;
@@ -99,7 +101,19 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
                 self.symbolizer_tgid_cleanup.insert(event.tgid);
             }
             Received::TraceEnter(_) | Received::Unknown(_) => {}
-            Received::Switch(_) | Received::TraceExit(_) | Received::PerfStack(_) | Received::TraceClose(_) => {
+            Received::PerfStack(event) => {
+                // -1 is set if stack is not collected
+                if event.ustack < -1 {
+                    self.stats
+                        .missing_stacks_counter
+                        .entry(event.ustack)
+                        .and_modify(|e| *e += 1)
+                        .or_insert(1);
+                }
+                self.stats.total_rows += 1;
+                self.stats.rows_in_current_file += 1;
+            }
+            Received::Switch(_) | Received::TraceExit(_) | Received::TraceClose(_) => {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
@@ -122,30 +136,22 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         }
 
         if self.stats.rows_in_current_file == self.cfg.rows_per_group * self.cfg.groups_per_file {
-            on_exit(
-                self.writer.take().expect("writer should be present"),
-                &mut self.collector.group,
-                &self.symbolizer,
-                &self.frames,
-            )
-            .context("closing current file")?;
-            move_file_with_timestamp(
-                &self.cfg.directory,
-                PENDING_FILE_PREFIX,
-                FILE_PREFIX,
-                self.stats.current_file_index,
-            )?;
-
-            let file = create_file(&self.cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
-            self.writer = Some(GroupWriter::with_compression(file, self.cfg.compression)?);
-
+            self.exit_current_file()?;
+            self.writer = Some(GroupWriter::with_compression(
+                create_file(&self.cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?,
+                self.cfg.compression,
+            )?);
             self.stats.current_file_index += 1;
             self.stats.rows_in_current_file = 0;
         }
         Ok(())
     }
 
-    pub(crate) fn exit(&mut self) -> Result<()> {
+    pub(crate) fn exit_current_file(&mut self) -> Result<()> {
+        if !self.stats.missing_stacks_counter.is_empty() {
+            info!("missing stacks due to errors: {:?}", self.stats.missing_stacks_counter);
+            self.stats.missing_stacks_counter.clear();
+        }
         if let Some(writer) = self.writer.take() {
             on_exit(writer, &mut self.collector.group, &self.symbolizer, &self.frames).context("closing last file")?;
             move_file_with_timestamp(
