@@ -27,7 +27,7 @@ use crate::{
 };
 
 mod past {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/bpf/past.skel.rs"));
+    include!(concat!(env!("OUT_DIR"), "/past.skel.rs"));
 }
 use past::*;
 
