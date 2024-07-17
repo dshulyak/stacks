@@ -235,6 +235,12 @@ fn main() -> Result<()> {
         .handle__sched_process_exec()
         .attach()
         .expect("attach sched exec");
+    let _rss_stat_link = skel
+        .progs_mut()
+        .handle__mm_trace_rss_stat()
+        .attach()
+        .expect("attach mm_trace_rss_stat");
+
     let mut _usdt_links = vec![];
     for u in opt.usdt.iter() {
         let _usdt_enter = skel

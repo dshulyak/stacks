@@ -16,6 +16,7 @@
 #define TYPE_TRACING_CLOSE_EVENT 4
 #define TYPE_PROCESS_EXIT_EVENT 5
 #define TYPE_PROCESS_EXEC_EVENT 6
+#define TYPE_RSS_STAT_EVENT 7
 
 enum errors {
     DROPPED_EVENTS
@@ -89,6 +90,15 @@ struct tracing_close_event {
     __u32 pid;
     __u32 cpu_id;
     __u64 span_id;
+};
+
+struct rss_stat_event {
+    __u8 type;
+    __u32 tgid;
+    __u64 ts;
+    __u64 rss;
+    __s32 ustack;
+    __s32 kstack;
 };
 
 #endif

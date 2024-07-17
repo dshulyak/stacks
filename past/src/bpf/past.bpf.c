@@ -25,6 +25,8 @@ const volatile struct
     bool switch_kstack;
     bool perf_ustack;
     bool perf_kstack;
+    bool rss_ustack;
+    bool rss_kstack;
 } cfg = {
     .debug = false,
     .filter_tgid = false,
@@ -33,6 +35,8 @@ const volatile struct
     .switch_kstack = true,
     .perf_ustack = true,
     .perf_kstack = false,
+    .rss_ustack = true,
+    .rss_kstack = false,
 };
 
 // output is printed to /sys/kernel/debug/tracing/trace_pipe
@@ -42,15 +46,13 @@ const volatile struct
             bpf_printk(fmt, ##__VA_ARGS__); \
     })
 
-
-struct 
+struct
 {
     __uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
     __uint(key_size, sizeof(u32));
     __uint(value_size, sizeof(u64));
     __uint(max_entries, DROPPED_EVENTS + 1);
 } errors_counter SEC(".maps");
-
 
 __always_inline void inc_dropped()
 {
@@ -244,6 +246,7 @@ int handle__sched_switch(u64 *ctx)
         event->kstack = -1;
     }
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    return 0;
 }
 
 SEC("perf_event")
@@ -288,13 +291,14 @@ int handle__perf_event(void *ctx)
         event->kstack = -1;
     }
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    return 0;
 }
 
 SEC("tp_btf/sched_process_exit")
 int handle__sched_process_exit(u64 *ctx)
 {
     struct task_struct *p = (void *)ctx[0];
-    if (p->tgid != p->pid) 
+    if (p->tgid != p->pid)
     {
         return 0;
     }
@@ -314,13 +318,14 @@ int handle__sched_process_exit(u64 *ctx)
     event->timestamp = bpf_ktime_get_ns();
     event->tgid = tgid;
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    return 0;
 }
 
 SEC("tp_btf/sched_process_exec")
 int handle__sched_process_exec(u64 *ctx)
 {
     struct task_struct *p = (void *)ctx[0];
-    if (p->tgid != p->pid) 
+    if (p->tgid != p->pid)
     {
         return 0;
     }
@@ -339,6 +344,7 @@ int handle__sched_process_exec(u64 *ctx)
     event->tgid = p->tgid;
     bpf_probe_read_kernel(&event->comm, sizeof(event->comm), &p->comm);
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    return 0;
 }
 
 SEC("usdt")
@@ -450,6 +456,88 @@ int BPF_USDT(past_tracing_close, u64 span_id)
     return 0;
 }
 
+s64 percpu_counter_read_positive(struct percpu_counter *fbc)
+{
+    s64 ret;
+    ret = fbc->count;
+    if (ret >= 0)
+        return ret;
+    return 0;
+}
+
+struct mm_rss_stat___pre62 {
+	atomic_long_t count[4];
+} __attribute__((preserve_access_index));
+
+struct mm_struct___pre62 {
+	struct mm_rss_stat___pre62 rss_stat;
+} __attribute__((preserve_access_index));
+
+struct mm_struct___post62
+{
+    struct percpu_counter rss_stat[NR_MM_COUNTERS];
+} __attribute__((preserve_access_index));
+
+SEC("tp_btf/rss_stat")
+int handle__mm_trace_rss_stat(u64 *ctx)
+{
+    u64 __pid_tgid = bpf_get_current_pid_tgid();
+    gid_t tgid = __pid_tgid >> 32;
+    if (apply_tgid_filter(tgid) > 0)
+    {
+        return 0;
+    }
+    struct rss_stat_event *event = reserve_event(sizeof(struct rss_stat_event));
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping rss stat event\n");
+        return 0;
+    }
+    const struct mm_struct *mm = (void *)ctx[0];
+
+    u64 file_pages = 0;
+    u64 anon_pages = 0;
+    u64 shmem_pages = 0;
+
+    if (bpf_core_type_matches(struct mm_struct___pre62)) {
+      const struct mm_struct___pre62 *mms = mm;
+      file_pages = BPF_CORE_READ(mms, rss_stat.count[MM_FILEPAGES].counter);
+      anon_pages = BPF_CORE_READ(mms, rss_stat.count[MM_ANONPAGES].counter);
+      shmem_pages = BPF_CORE_READ(mms, rss_stat.count[MM_SHMEMPAGES].counter);
+    } else if (bpf_core_type_matches(struct mm_struct___post62)) {
+      const struct mm_struct___post62 *mms = mm;
+      struct percpu_counter file_fbc = BPF_CORE_READ(mms, rss_stat[MM_FILEPAGES]);
+      struct percpu_counter anon_fbc = BPF_CORE_READ(mms, rss_stat[MM_ANONPAGES]);
+      struct percpu_counter shmem_fbc = BPF_CORE_READ(mms, rss_stat[MM_SHMEMPAGES]);
+      file_pages = percpu_counter_read_positive(&file_fbc);
+      anon_pages = percpu_counter_read_positive(&anon_fbc);
+      shmem_pages = percpu_counter_read_positive(&shmem_fbc);
+    }
+    u64 rss = file_pages + anon_pages + shmem_pages;
+    event->type = TYPE_RSS_STAT_EVENT;
+    event->ts = bpf_ktime_get_ns();
+    event->tgid = tgid;
+    event->rss = rss;
+    if (cfg.rss_ustack)
+    {
+        event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->ustack = -1;
+    }
+    if (cfg.rss_kstack)
+    {
+        event->kstack = bpf_get_stackid(ctx, &stackmap, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->kstack = -1;
+    }
+    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    return 0;
+}
+
 // cargo libbpf doesn't generate bindings without definitions
 
 struct switch_event _switch_event = {0};
@@ -459,5 +547,6 @@ struct tracing_exit_event _tracing_exit_event = {0};
 struct tracing_close_event _tracing_close_event = {0};
 struct process_exit_event _process_exit_event = {0};
 struct process_exec_event _process_exec_event = {0};
+struct rss_stat_event _rss_stat_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";
