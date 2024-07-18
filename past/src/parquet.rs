@@ -19,6 +19,7 @@ pub enum EventKind {
     Perf,
     // Collected when process is switched out by the scheduler
     Switch,
+    RSSStat,
     TraceExit,
     TraceClose,
 }
@@ -28,6 +29,7 @@ impl From<EventKind> for &'static [u8] {
         match kind {
             EventKind::Perf => b"perf",
             EventKind::Switch => b"switch",
+            EventKind::RSSStat => b"rss",  
             EventKind::TraceExit => b"trace_exit",
             EventKind::TraceClose => b"trace_close",
         }
@@ -89,6 +91,14 @@ pub enum Event {
         tgid: i32,
         pid: i32,
         command: Bytes,
+        ustack: i32,
+        kstack: i32,
+    },
+    RssStat {
+        ts: i64,
+        tgid: i32,
+        command: Bytes,
+        amount: u64,
         ustack: i32,
         kstack: i32,
     },
@@ -259,6 +269,29 @@ impl Group {
                 self.unresolved_ustack.push(ustack);
                 self.unresolved_kstack.push(kstack);
                 self.add_empty_trace();
+                self.add_timestamp(ts);
+            }
+            Event::RssStat {
+                ts,
+                tgid,
+                command,
+                amount,
+                ustack,
+                kstack 
+            } => {
+                self.duration.push(0);
+                self.kind.push(EventKind::RSSStat.into());
+                self.cpu.push(0);
+                self.tgid.push(tgid);
+                self.pid.push(0);
+                self.span_id.push(0);
+                self.parent_id.push(0);
+                self.work_id.push(0);
+                self.amount.push(amount as i64);
+                self.command.push(command.into());
+                self.trace_name.push(Bytes::new().into());
+                self.unresolved_kstack.push(kstack);
+                self.unresolved_ustack.push(ustack);
                 self.add_timestamp(ts);
             }
             Event::TraceExit {

@@ -17,14 +17,14 @@ jobs:
       - uses: actions/checkout@v4
       - name: deps
         run: |
-          sudo apt install -y build-essential autoconf clang-14 flex bison pkg-config autopoint
+          sudo apt install -y build-essential autoconf clang-15 flex bison pkg-config autopoint
           sudo ln -s /usr/include/asm-generic /usr/include/asm
           sudo rm -f /bin/clang
-          sudo ln -s /usr/bin/clang-14 /bin/clang
+          sudo ln -s /usr/bin/clang-15 /bin/clang
       - uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
-      - run: cargo install --path=past --root=. --target ${{ matrix.target }}
+      - run: CLANG=clang-15 cargo install --path=past --root=. --target ${{ matrix.target }}
       - run: cargo install --path=pastconv --root=. --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:

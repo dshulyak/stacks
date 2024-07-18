@@ -493,18 +493,18 @@ int handle__mm_trace_rss_stat(u64 *ctx)
         bpf_printk_debug("ringbuf full. dropping rss stat event\n");
         return 0;
     }
-    const struct mm_struct *mm = (void *)ctx[0];
 
+
+    const struct mm_struct *mm = (void *)ctx[0];
     u64 file_pages = 0;
     u64 anon_pages = 0;
     u64 shmem_pages = 0;
-
     if (bpf_core_type_matches(struct mm_struct___pre62)) {
       const struct mm_struct___pre62 *mms = mm;
       file_pages = BPF_CORE_READ(mms, rss_stat.count[MM_FILEPAGES].counter);
       anon_pages = BPF_CORE_READ(mms, rss_stat.count[MM_ANONPAGES].counter);
       shmem_pages = BPF_CORE_READ(mms, rss_stat.count[MM_SHMEMPAGES].counter);
-    } else if (bpf_core_type_matches(struct mm_struct___post62)) {
+    } else {
       const struct mm_struct___post62 *mms = mm;
       struct percpu_counter file_fbc = BPF_CORE_READ(mms, rss_stat[MM_FILEPAGES]);
       struct percpu_counter anon_fbc = BPF_CORE_READ(mms, rss_stat[MM_ANONPAGES]);

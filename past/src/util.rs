@@ -121,9 +121,9 @@ pub(crate) fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[
     }
 }
 
-pub(crate) fn page_size() -> u64 {
+pub(crate) fn page_size() -> Result<u64> {
     match unsafe { libc::sysconf(libc::_SC_PAGESIZE) } {
-        -1 => panic!("Failed to query page size"),
-        x => x as u64,
+        -1 => anyhow::bail!("sysconf _SC_PAGESIZE failed"),
+        x => Ok(x as u64),
     }
 }

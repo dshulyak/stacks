@@ -24,6 +24,7 @@ unsafe impl Plain for past_types::tracing_exit_event {}
 unsafe impl Plain for past_types::tracing_close_event {}
 unsafe impl Plain for past_types::process_exit_event {}
 unsafe impl Plain for past_types::process_exec_event {}
+unsafe impl Plain for past_types::rss_stat_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -43,6 +44,7 @@ pub(crate) enum Received<'a> {
     TraceEnter(&'a past_types::tracing_enter_event),
     TraceExit(&'a past_types::tracing_exit_event),
     TraceClose(&'a past_types::tracing_close_event),
+    RssStat(&'a past_types::rss_stat_event),
     Unknown(&'a [u8]),
 }
 
@@ -56,6 +58,7 @@ impl<'a> From<&'a [u8]> for Received<'a> {
             4 => Received::TraceClose(to_event(bytes)),
             5 => Received::ProcessExit(to_event(bytes)),
             6 => Received::ProcessExec(to_event(bytes)),
+            7 => Received::RssStat(to_event(bytes)),
             _ => Received::Unknown(bytes),
         }
     }
@@ -74,13 +77,15 @@ struct SpanEnter {
 pub(crate) struct Collector {
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
     pub group: Group,
+    page_size: u64,
 }
 
 impl Collector {
-    pub(crate) fn new(group: Group) -> Self {
+    pub(crate) fn new(group: Group, page_size: u64) -> Self {
         Self {
             tgid_span_id_pid_to_enter: BTreeMap::new(),
             group,
+            page_size,
         }
     }
 
@@ -92,7 +97,6 @@ impl Collector {
         // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
-
         match event {
             Received::Switch(event) => {
                 let command = match tgid_to_command.get(&event.tgid) {
@@ -117,7 +121,7 @@ impl Collector {
                     let command = match tgid_to_command.get(&event.tgid) {
                         Some(command) => command,
                         None => {
-                            anyhow::bail!("missing command for pid {}", event.tgid);
+                            anyhow::bail!("missing command for tgid {}", event.tgid);
                         }
                     };
                     self.group.collect(Event::CPUStack {
@@ -130,6 +134,22 @@ impl Collector {
                         kstack: event.kstack,
                     });
                 };
+            }
+            Received::RssStat(event) => {
+                let command = match tgid_to_command.get(&event.tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for tgid {}", event.tgid);
+                    }
+                };
+                self.group.collect(Event::RssStat {
+                    ts: event.ts as i64,
+                    tgid: event.tgid as i32,
+                    command: command.clone(),
+                    amount: event.rss * self.page_size,
+                    ustack: event.ustack,
+                    kstack: event.kstack,
+                });
             }
             Received::TraceEnter(event) => {
                 let entry = self
