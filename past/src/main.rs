@@ -121,6 +121,8 @@ struct Opt {
 
     #[clap(long, default_value = "u", help = "which stacks to collect when rss changes")]
     rss_stacks: StackOptions,
+    #[clap(long, default_value = "0", help = "reduce number of emitted rss events. 0 disables throttling")]
+    rss_throttle: u16,
 
     #[clap(long, default_value = "false", help = "print version and exit")]
     version: bool,
@@ -204,6 +206,7 @@ fn main() -> Result<()> {
     cfg.filter_tgid.write(true);
     cfg.filter_comm.write(true);
     cfg.debug.write(opt.debug_bpf);
+    cfg.rss_stat_throttle = opt.rss_throttle;
 
     decode_stack_options_into_bpf_cfg(&opt.switch_stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
     decode_stack_options_into_bpf_cfg(&opt.perf_cpu_stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);

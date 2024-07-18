@@ -27,6 +27,7 @@ const volatile struct
     bool perf_kstack;
     bool rss_ustack;
     bool rss_kstack;
+    __u16 rss_stat_throttle;
 } cfg = {
     .debug = false,
     .filter_tgid = false,
@@ -37,6 +38,7 @@ const volatile struct
     .perf_kstack = false,
     .rss_ustack = true,
     .rss_kstack = false,
+    .rss_stat_throttle = 0,
 };
 
 // output is printed to /sys/kernel/debug/tracing/trace_pipe
@@ -83,6 +85,36 @@ static __always_inline void *reserve_event(__u64 size)
         inc_dropped();
     }
     return event;
+}
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __type(key, u32);
+    __type(value, u16);
+    __uint(max_entries, 128);
+    __uint(map_flags, BPF_F_NO_COMMON_LRU);
+} throttle_rss_stat SEC(".maps");
+
+static __always_inline int throttle_rss_stat_event(u32 tgid)
+{
+    if (cfg.rss_stat_throttle == 0)
+    {
+        return 0;
+    }
+    u16 *val = bpf_map_lookup_elem(&throttle_rss_stat, &tgid);
+    if (!val)
+    {
+        u16 zero = 0;
+        bpf_map_update_elem(&throttle_rss_stat, &tgid, &zero, BPF_ANY);
+        return 0;
+    }
+    *val += 1;
+    if (*val % cfg.rss_stat_throttle == 0)
+    {
+        return 0;
+    }
+    return 1;
 }
 
 struct
@@ -465,12 +497,14 @@ s64 percpu_counter_read_positive(struct percpu_counter *fbc)
     return 0;
 }
 
-struct mm_rss_stat___pre62 {
-	atomic_long_t count[4];
+struct mm_rss_stat___pre62
+{
+    atomic_long_t count[4];
 } __attribute__((preserve_access_index));
 
-struct mm_struct___pre62 {
-	struct mm_rss_stat___pre62 rss_stat;
+struct mm_struct___pre62
+{
+    struct mm_rss_stat___pre62 rss_stat;
 } __attribute__((preserve_access_index));
 
 struct mm_struct___post62
@@ -487,34 +521,43 @@ int handle__mm_trace_rss_stat(u64 *ctx)
     {
         return 0;
     }
+    if (throttle_rss_stat_event(tgid) > 0)
+    {
+        bpf_printk_debug("throttling rss stat event for tgid %d\n", tgid);
+        return 0;
+    }
+    
+    const struct mm_struct *mm = (void *)ctx[0];
+    u64 file_pages = 0;
+    u64 anon_pages = 0;
+    u64 shmem_pages = 0;
+    // i haven't looked why bpf_core_type_matches(struct mm_struct___pre62) doesn't match on 5.15.
+    // neither bpf_core_type_matches(struct mm_struct___post62) on 6.5
+    if (bpf_core_field_exists(mm->rss_stat.count))
+    {
+        const struct mm_struct___pre62 *mms = mm;
+        file_pages = BPF_CORE_READ(mms, rss_stat.count[MM_FILEPAGES].counter);
+        anon_pages = BPF_CORE_READ(mms, rss_stat.count[MM_ANONPAGES].counter);
+        shmem_pages = BPF_CORE_READ(mms, rss_stat.count[MM_SHMEMPAGES].counter);
+    }
+    else
+    {
+        const struct mm_struct___post62 *mms = mm;
+        struct percpu_counter file_fbc = BPF_CORE_READ(mms, rss_stat[MM_FILEPAGES]);
+        struct percpu_counter anon_fbc = BPF_CORE_READ(mms, rss_stat[MM_ANONPAGES]);
+        struct percpu_counter shmem_fbc = BPF_CORE_READ(mms, rss_stat[MM_SHMEMPAGES]);
+        file_pages = percpu_counter_read_positive(&file_fbc);
+        anon_pages = percpu_counter_read_positive(&anon_fbc);
+        shmem_pages = percpu_counter_read_positive(&shmem_fbc);
+    }
+    u64 rss = file_pages + anon_pages + shmem_pages;
+    
     struct rss_stat_event *event = reserve_event(sizeof(struct rss_stat_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping rss stat event\n");
         return 0;
     }
-
-
-    const struct mm_struct *mm = (void *)ctx[0];
-    u64 file_pages = 0;
-    u64 anon_pages = 0;
-    u64 shmem_pages = 0;
-    // i haven't looked why bpf_core_type_matches(struct mm_struct___pre62) doesn't match on ubuntu-jammy
-    if (bpf_core_field_exists(mm->rss_stat.count)) {
-      const struct mm_struct___pre62 *mms = mm;
-      file_pages = BPF_CORE_READ(mms, rss_stat.count[MM_FILEPAGES].counter);
-      anon_pages = BPF_CORE_READ(mms, rss_stat.count[MM_ANONPAGES].counter);
-      shmem_pages = BPF_CORE_READ(mms, rss_stat.count[MM_SHMEMPAGES].counter);
-    } else {
-      const struct mm_struct___post62 *mms = mm;
-      struct percpu_counter file_fbc = BPF_CORE_READ(mms, rss_stat[MM_FILEPAGES]);
-      struct percpu_counter anon_fbc = BPF_CORE_READ(mms, rss_stat[MM_ANONPAGES]);
-      struct percpu_counter shmem_fbc = BPF_CORE_READ(mms, rss_stat[MM_SHMEMPAGES]);
-      file_pages = percpu_counter_read_positive(&file_fbc);
-      anon_pages = percpu_counter_read_positive(&anon_fbc);
-      shmem_pages = percpu_counter_read_positive(&shmem_fbc);
-    }
-    u64 rss = file_pages + anon_pages + shmem_pages;
     event->type = TYPE_RSS_STAT_EVENT;
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
