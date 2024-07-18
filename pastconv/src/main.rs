@@ -43,7 +43,7 @@ enum PprofCommand {
         command: String,
     },
     #[clap(aliases = &["r"])]
-    Rss{
+    Rss {
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
