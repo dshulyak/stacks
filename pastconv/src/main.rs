@@ -8,6 +8,7 @@ pub mod pprof;
 
 const CPU_PPROF_SQL: &str = include_str!("sql/cpu_ustacks_for_command.sql");
 const OFFCPU_PPROF_SQL: &str = include_str!("sql/offcpu_stacks_for_command.sql");
+const RSS_PPROF_SQL: &str = include_str!("sql/ustack_rss_growth_for_command.sql");
 
 #[derive(Parser)]
 struct Opt {
@@ -31,11 +32,18 @@ enum Command {
 
 #[derive(Parser)]
 enum PprofCommand {
+    #[clap(aliases = &["c"])]
     Cpu {
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
+    #[clap(aliases = &["o"])]
     Offcpu {
+        #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
+        command: String,
+    },
+    #[clap(aliases = &["r"])]
+    Rss{
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
@@ -59,6 +67,9 @@ async fn main() -> Result<()> {
             }
             PprofCommand::Offcpu { command } => {
                 pprof::pprof(&opt.register, &destination, OFFCPU_PPROF_SQL, Some(&command)).await
+            }
+            PprofCommand::Rss { command } => {
+                pprof::pprof(&opt.register, &destination, RSS_PPROF_SQL, Some(&command)).await
             }
             PprofCommand::Raw { query_file } => {
                 let query = std::fs::read_to_string(query_file)?;

@@ -22,14 +22,14 @@ jobs:
           toolchain: ${{ matrix.rust }}
       - name: deps
         run: |
-          sudo apt install -y build-essential autoconf clang-14 flex bison pkg-config autopoint
+          sudo apt install -y build-essential autoconf clang-15 flex bison pkg-config autopoint
           sudo ln -s /usr/include/asm-generic /usr/include/asm
           sudo rm -f /bin/clang
-          sudo ln -s /usr/bin/clang-14 /bin/clang
+          sudo ln -s /usr/bin/clang-15 /bin/clang
       - name: cargo test
         run: cargo test --profile=${{ matrix.profile }} --locked
       - name: cargo build
-        run: cargo build --bins --examples --profile=${{ matrix.profile }} --locked
+        run: CLANG=clang-15 cargo build --bins --examples --profile=${{ matrix.profile }} --locked
       - name: e2e test (runs with sudo)
         run: |
           if [ "${{ matrix.profile }}" = "dev" ]; then

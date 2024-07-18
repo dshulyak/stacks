@@ -1,6 +1,7 @@
 use core::time;
 use std::{
     collections::HashSet,
+    mem::MaybeUninit,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -118,6 +119,9 @@ struct Opt {
     #[clap(long, default_value = "u", help = "which stacks to collect on perf event")]
     perf_cpu_stacks: StackOptions,
 
+    #[clap(long, default_value = "u", help = "which stacks to collect when rss changes")]
+    rss_stacks: StackOptions,
+
     #[clap(long, default_value = "false", help = "print version and exit")]
     version: bool,
 }
@@ -128,6 +132,27 @@ enum StackOptions {
     K,
     UK,
     KU,
+}
+
+fn decode_stack_options_into_bpf_cfg(
+    opts: &StackOptions,
+    kstack: &mut MaybeUninit<bool>,
+    ustack: &mut MaybeUninit<bool>,
+) {
+    match opts {
+        StackOptions::U => {
+            kstack.write(false);
+            ustack.write(true);
+        }
+        StackOptions::K => {
+            kstack.write(true);
+            ustack.write(false);
+        }
+        StackOptions::UK | StackOptions::KU => {
+            kstack.write(true);
+            ustack.write(true);
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -179,34 +204,10 @@ fn main() -> Result<()> {
     cfg.filter_tgid.write(true);
     cfg.filter_comm.write(true);
     cfg.debug.write(opt.debug_bpf);
-    match opt.switch_stacks {
-        StackOptions::U => {
-            cfg.switch_kstack.write(false);
-            cfg.switch_ustack.write(true);
-        }
-        StackOptions::K => {
-            cfg.switch_kstack.write(true);
-            cfg.switch_ustack.write(false);
-        }
-        StackOptions::UK | StackOptions::KU => {
-            cfg.switch_kstack.write(true);
-            cfg.switch_ustack.write(true);
-        }
-    }
-    match opt.perf_cpu_stacks {
-        StackOptions::U => {
-            cfg.perf_kstack.write(false);
-            cfg.perf_ustack.write(true);
-        }
-        StackOptions::K => {
-            cfg.perf_kstack.write(true);
-            cfg.perf_ustack.write(false);
-        }
-        StackOptions::UK | StackOptions::KU => {
-            cfg.perf_kstack.write(true);
-            cfg.perf_ustack.write(true);
-        }
-    }
+
+    decode_stack_options_into_bpf_cfg(&opt.switch_stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
+    decode_stack_options_into_bpf_cfg(&opt.perf_cpu_stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
+    decode_stack_options_into_bpf_cfg(&opt.rss_stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
 
     open_skel
         .maps_mut()
