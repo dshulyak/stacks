@@ -64,7 +64,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         let f = create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
         let writer = GroupWriter::with_compression(f, cfg.compression)?;
         let group = Group::new(cfg.rows_per_group, cfg.timestamp_adjustment, cfg.perf_event_frequency);
-        let pg_size = page_size()?; 
+        let pg_size = page_size()?;
         let collector = Collector::new(group, pg_size);
         Ok(Program {
             cfg,
@@ -114,7 +114,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
-            Received::Switch(_) |  Received::RssStat(_) | Received::TraceExit(_) | Received::TraceClose(_) => {
+            Received::Switch(_) | Received::RssStat(_) | Received::TraceExit(_) | Received::TraceClose(_) => {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }

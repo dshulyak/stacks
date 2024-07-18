@@ -121,7 +121,11 @@ struct Opt {
 
     #[clap(long, default_value = "u", help = "which stacks to collect when rss changes")]
     rss_stacks: StackOptions,
-    #[clap(long, default_value = "0", help = "reduce number of emitted rss events. 0 disables throttling")]
+    #[clap(
+        long,
+        default_value = "0",
+        help = "reduce number of emitted rss events. 0 disables throttling"
+    )]
     rss_throttle: u16,
 
     #[clap(long, default_value = "false", help = "print version and exit")]

@@ -29,7 +29,7 @@ impl From<EventKind> for &'static [u8] {
         match kind {
             EventKind::Perf => b"perf",
             EventKind::Switch => b"switch",
-            EventKind::RSSStat => b"rss",  
+            EventKind::RSSStat => b"rss",
             EventKind::TraceExit => b"trace_exit",
             EventKind::TraceClose => b"trace_close",
         }
@@ -277,7 +277,7 @@ impl Group {
                 command,
                 amount,
                 ustack,
-                kstack 
+                kstack,
             } => {
                 self.duration.push(0);
                 self.kind.push(EventKind::RSSStat.into());
