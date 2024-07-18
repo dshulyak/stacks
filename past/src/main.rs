@@ -123,8 +123,8 @@ struct Opt {
     rss_stacks: StackOptions,
     #[clap(
         long,
-        default_value = "0",
-        help = "reduce number of emitted rss events. 0 disables throttling"
+        default_value = "32",
+        help = "reduce number of emitted rss events. 0 disables throttling."
     )]
     rss_throttle: u16,
 
@@ -138,6 +138,7 @@ enum StackOptions {
     K,
     UK,
     KU,
+    N
 }
 
 fn decode_stack_options_into_bpf_cfg(
@@ -157,6 +158,10 @@ fn decode_stack_options_into_bpf_cfg(
         StackOptions::UK | StackOptions::KU => {
             kstack.write(true);
             ustack.write(true);
+        }
+        StackOptions::N => {
+            kstack.write(false);
+            ustack.write(false);
         }
     }
 }
