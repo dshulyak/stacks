@@ -1,11 +1,12 @@
 with rss_growth as (
     select
         ustack,
-        CAST(amount as BIGINT) - LAG(CAST(amount as BIGINT)) OVER (
+        amount,
+        LAG(amount) OVER (
             PARTITION BY tgid
             ORDER BY
                 timestamp
-        ) as rss
+        ) as prev_amount
     from
         stacks
     where
@@ -16,11 +17,11 @@ with rss_growth as (
 select
     ustack,
     count(*) as cnt,
-    sum(rss) as total_rss
+    sum(amount - prev_amount) as total_rss
 from
     rss_growth
 where
-    rss > 0
+    amount > prev_amount
 group by
     ustack
 order by
