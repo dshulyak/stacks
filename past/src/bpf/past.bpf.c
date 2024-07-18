@@ -499,7 +499,8 @@ int handle__mm_trace_rss_stat(u64 *ctx)
     u64 file_pages = 0;
     u64 anon_pages = 0;
     u64 shmem_pages = 0;
-    if (bpf_core_type_matches(struct mm_struct___pre62)) {
+    // i haven't looked why bpf_core_type_matches(struct mm_struct___pre62) doesn't match on ubuntu-jammy
+    if (bpf_core_field_exists(mm->rss_stat.count)) {
       const struct mm_struct___pre62 *mms = mm;
       file_pages = BPF_CORE_READ(mms, rss_stat.count[MM_FILEPAGES].counter);
       anon_pages = BPF_CORE_READ(mms, rss_stat.count[MM_ANONPAGES].counter);

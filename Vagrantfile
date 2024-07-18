@@ -1,5 +1,5 @@
 Vagrant.configure("2") do |config|
-  config.vm.define "build_past" do |config|
+  config.vm.define "build" do |config|
     config.vm.box = "ubuntu/jammy64"
     config.vm.provider "virtualbox" do |vb|
       vb.memory = "8192"
@@ -8,9 +8,9 @@ Vagrant.configure("2") do |config|
     config.vm.synced_folder ".", "/home/vagrant/build"
     config.vm.provision "shell", privileged: true, inline: <<-SHELL
       apt update
-      apt install -y build-essential autoconf clang-14 flex bison pkg-config autopoint
+      apt install -y build-essential autoconf clang-15 flex bison pkg-config autopoint
       ln -s /usr/include/asm-generic /usr/include/asm
-      rm -f /bin/clang && ln -s /usr/bin/clang-14 /bin/clang
+      rm -f /bin/clang && ln -s /usr/bin/clang-15 /bin/clang
 
       snap install rustup --classic
     SHELL
@@ -21,7 +21,7 @@ Vagrant.configure("2") do |config|
     SHELL
   end
 
-  config.vm.define "tests_past"  do |config|
+  config.vm.define "test"  do |config|
     config.vm.box = "ubuntu/jammy64"
     config.vm.provider "virtualbox" do |vb|
       vb.memory = "4096"
