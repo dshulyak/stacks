@@ -14,7 +14,7 @@ use parquet::{
 };
 use tracing::instrument;
 
-pub enum EventKind {
+pub(crate) enum EventKind {
     // Perf collected from sampling process
     Perf,
     // Collected when process is switched out by the scheduler
@@ -74,7 +74,7 @@ fn events_schema() -> types::Type {
 }
 
 #[derive(Debug)]
-pub enum Event {
+pub(crate) enum Event {
     Switch {
         ts: i64,
         duration: i64,
@@ -132,7 +132,7 @@ pub enum Event {
 }
 
 #[derive(Debug)]
-pub struct Group {
+pub(crate) struct Group {
     max_timestamp: i64,
     timestamp_adjustment: u64,
     perf_freq: i64,
@@ -424,7 +424,7 @@ impl Group {
 }
 
 #[derive(Debug)]
-pub struct GroupWriter<W: Write + Send>(SerializedFileWriter<W>);
+pub(crate) struct GroupWriter<W: Write + Send>(SerializedFileWriter<W>);
 
 impl<W: Write + Send> GroupWriter<W> {
     pub(crate) fn with_compression(writer: W, compression: Compression) -> Result<Self> {
@@ -568,4 +568,4 @@ struct RepeatedStack {
     definition_levels: Vec<i16>,
 }
 
-pub type Compression = basic::Compression;
+pub(crate) type Compression = basic::Compression;

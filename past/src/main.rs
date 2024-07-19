@@ -1,13 +1,8 @@
-use core::time;
 use std::{
-    collections::HashSet,
-    mem::MaybeUninit,
-    path::PathBuf,
-    sync::{
+    collections::HashSet, fs, io::Read, mem::MaybeUninit, ops::Deref, path::{Path, PathBuf}, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
-    thread::sleep,
+    }, thread::sleep, time::Duration
 };
 
 use anyhow::{Context, Result};
@@ -24,7 +19,6 @@ use crate::{
     collector::{BlazesymSymbolizer, Frames, Received, Symbolizer},
     parquet::Compression,
     perf_event::{attach_perf_event, perf_event_per_cpu},
-    util::scan_proc,
 };
 
 mod past {
@@ -38,7 +32,6 @@ mod perf_event;
 mod program;
 #[cfg(test)]
 mod tests;
-mod util;
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -69,7 +62,7 @@ struct Opt {
         short,
         long,
         default_value = "10",
-        help = "file is a unit of paralellism in datafusion, 
+        help = "file is a unit of paralellism in datafusion,
                 if data is partitioned into several files datafusion will be able to process different files on different cores,
                 additionally if file is not properly closed data will be lost."
     )]
@@ -138,7 +131,7 @@ enum StackOptions {
     K,
     UK,
     KU,
-    N
+    N,
 }
 
 fn decode_stack_options_into_bpf_cfg(
@@ -201,9 +194,9 @@ fn main() -> Result<()> {
         interrupt_handler.store(false, Ordering::Relaxed);
     })?;
 
-    util::ensure_exists(&opt.dir)?;
+    ensure_exists(&opt.dir)?;
 
-    let uptime = util::parse_uptime()?;
+    let uptime = parse_uptime()?;
     let current_unix = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .context("current unix time")?;
@@ -284,7 +277,7 @@ fn main() -> Result<()> {
 
     let zero: u8 = 0;
     for comm in opt.commands.iter() {
-        let comm = util::Comm::from(comm.as_str());
+        let comm = Comm::from(comm.as_str());
         let comm = *comm;
         skel.maps_mut()
             .filter_comm()
@@ -367,7 +360,7 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     maps: &PastMaps,
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
-    sleep_interval: time::Duration,
+    sleep_interval: Duration,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
@@ -417,7 +410,7 @@ impl Frames for MapFrames<'_> {
     }
 }
 
-// this value must match enum in  past/src/bpf/past.h
+// this value must match enum in past/src/bpf/past.h
 // i need to lookup how to generate bindings for enums
 const DROPPED_EVENTS: u32 = 0;
 
@@ -425,12 +418,86 @@ fn count_dropped_events(errors_counter: &libbpf_rs::Map) -> Result<u64, libbpf_r
     let key = DROPPED_EVENTS.to_ne_bytes();
     let rst = errors_counter.lookup_percpu(&key, MapFlags::empty())?;
     if let Some(rst) = rst {
-        let mut sum = 0;
-        for cpu in rst.iter() {
-            sum += u64::from_ne_bytes(cpu.as_slice().try_into().expect("events counter must be 8 bytes long"));
-        }
-        Ok(sum)
+        Ok(rst
+            .iter()
+            .map(|cpu| u64::from_ne_bytes(cpu.as_slice().try_into().expect("events counter must be 8 bytes long")))
+            .sum())
     } else {
         Ok(0)
+    }
+}
+
+fn ensure_exists(dir: &Path) -> anyhow::Result<()> {
+    if !dir.exists() {
+        std::fs::create_dir_all(dir)?;
+    }
+    Ok(())
+}
+
+fn parse_uptime() -> anyhow::Result<Duration> {
+    let mut uptime = String::new();
+    fs::File::open("/proc/uptime")?.read_to_string(&mut uptime)?;
+    // example format
+    // 4039.25                  94816.49
+    // seconds.fraction_seconds idle_seconds.fraction_seconds
+    // i am only interested in the first part
+    let mut parts = uptime.split_whitespace().flat_map(|x| x.split('.'));
+    let seconds = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing seconds"))?
+        .parse::<u64>()?;
+    let fraction_seconds = parts
+        .next()
+        .ok_or_else(|| anyhow::anyhow!("missing fraction seconds"))?
+        .parse::<u64>()?;
+    Ok(Duration::from_secs(seconds) + Duration::from_millis(fraction_seconds * 10))
+}
+
+#[derive(Debug)]
+struct Proc {
+    tgid: i32,
+    comm: Comm,
+}
+
+fn scan_proc(comms: &HashSet<&str>) -> Result<Vec<Proc>> {
+    let mut rst = vec![];
+    for entry in fs::read_dir("/proc")? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if let Ok(tgid) = name.parse::<u32>() {
+            let comm = fs::read_to_string(path.join("comm"))?;
+            let trimmed = comm.trim();
+            if comms.contains(trimmed) {
+                rst.push(Proc {
+                    tgid: tgid as i32,
+                    comm: Comm::from(trimmed),
+                });
+            }
+        }
+    }
+    Ok(rst)
+}
+
+#[derive(Debug)]
+struct Comm([u8; 16]);
+
+impl From<&str> for Comm {
+    fn from(s: &str) -> Self {
+        let mut comm = [0; 16];
+        comm[..s.len()].copy_from_slice(s.as_bytes());
+        Self(comm)
+    }
+}
+
+impl Deref for Comm {
+    type Target = [u8; 16];
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }

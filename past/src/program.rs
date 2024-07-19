@@ -1,8 +1,9 @@
 use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
+    collections::{hash_map, HashMap, HashSet},
+    fs::{self, File},
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
@@ -10,13 +11,12 @@ use bytes::Bytes;
 use tracing::{debug, info, warn};
 
 use crate::{
-    collector::{symbolize, Collector, Frames, Received, Symbolizer},
+    collector::{null_terminated, symbolize, Collector, Frames, Received, Symbolizer},
     parquet::{Compression, Group, GroupWriter},
-    util::{command, create_file, move_file_with_timestamp, page_size},
 };
 
 #[derive(Debug)]
-pub struct Config {
+pub(crate) struct Config {
     pub directory: PathBuf,
     pub timestamp_adjustment: u64,
     pub groups_per_file: usize,
@@ -28,14 +28,14 @@ pub struct Config {
 }
 
 #[derive(Debug)]
-pub struct Stats {
+pub(crate) struct Stats {
     pub rows_in_current_file: usize,
     pub total_rows: usize,
     pub current_file_index: usize,
     pub missing_stacks_counter: HashMap<i32, usize>,
 }
 
-pub struct Program<Fr: Frames, Sym: Symbolizer> {
+pub(crate) struct Program<Fr: Frames, Sym: Symbolizer> {
     cfg: Config,
     writer: Option<GroupWriter<File>>,
     collector: Collector,
@@ -179,5 +179,38 @@ fn on_exit<W: Write + Send>(
         stack_group.reuse();
     }
     stack_writer.close()?;
+    Ok(())
+}
+
+fn page_size() -> Result<u64> {
+    match unsafe { libc::sysconf(libc::_SC_PAGESIZE) } {
+        -1 => anyhow::bail!("sysconf _SC_PAGESIZE failed"),
+        x => Ok(x as u64),
+    }
+}
+
+fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[u8]) -> Bytes {
+    let comm = null_terminated(command);
+    let existing = commands.entry(tgid);
+    match existing {
+        hash_map::Entry::Vacant(vacant) => vacant.insert(Bytes::copy_from_slice(comm)).clone(),
+        hash_map::Entry::Occupied(mut occupied) => {
+            if occupied.get() != comm {
+                occupied.insert(Bytes::copy_from_slice(comm));
+            }
+            occupied.get().clone()
+        }
+    }
+}
+
+fn create_file(dir: &Path, prefix: &str) -> Result<File> {
+    Ok(File::create(dir.join(format!("{}.parquet", prefix)))?)
+}
+
+fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, index: usize) -> Result<()> {
+    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    let from = dir.join(format!("{}.parquet", from_prefix));
+    let to = dir.join(format!("{}-{}-{}.parquet", to_prefix, index, now));
+    fs::rename(from, to)?;
     Ok(())
 }

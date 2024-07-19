@@ -1,8 +1,10 @@
 use std::{
     collections::{btree_map, BTreeMap, HashMap, HashSet},
+    fs,
     iter::empty,
     num::NonZeroU32,
     rc::Rc,
+    time::SystemTime,
 };
 
 use anyhow::Result;
@@ -14,7 +16,6 @@ use tracing::{debug, instrument, warn};
 use crate::{
     parquet::{Event, Group},
     past::past_types,
-    util::exe_name_and_change_time,
 };
 
 unsafe impl Plain for past_types::switch_event {}
@@ -423,8 +424,8 @@ pub(crate) struct BlazesymSymbolizer {
     kernel_symbolizer: symbolize::Symbolizer,
     // symbolizers for userspace data have to live until:
     // - all processes that use referenced executable exited
-    // - last batch of frames is symbolized after last process exited
-    // if we drop symbolizer immediately we will lose data from that process
+    // - last batch of frames are symbolized after last process that used them exited
+    // (if i drop symbolizer immediately data will be lost)
     executable_symbolizers: HashMap<(String, u64), Rc<ExecutableSymbolizer>>,
     process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
 }
@@ -508,4 +509,12 @@ impl Symbolizer for BlazesymSymbolizer {
         )?;
         Ok(rst)
     }
+}
+
+fn exe_name_and_change_time(tgid: u32) -> Result<(String, u64)> {
+    let path = format!("/proc/{}/exe", tgid);
+    let exe = fs::read_link(path)?;
+    let meta = exe.metadata()?;
+    let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    Ok((exe.to_string_lossy().to_string(), mtime))
 }
