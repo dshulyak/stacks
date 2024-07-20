@@ -1,8 +1,15 @@
 use std::{
-    collections::HashSet, fs, io::Read, mem::MaybeUninit, ops::Deref, path::{Path, PathBuf}, sync::{
+    collections::HashSet,
+    fs,
+    io::Read,
+    mem::MaybeUninit,
+    path::{Path, PathBuf},
+    sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    }, thread::sleep, time::Duration
+    },
+    thread::sleep,
+    time::Duration,
 };
 
 use anyhow::{Context, Result};
@@ -277,8 +284,7 @@ fn main() -> Result<()> {
 
     let zero: u8 = 0;
     for comm in opt.commands.iter() {
-        let comm = Comm::from(comm.as_str());
-        let comm = *comm;
+        let comm = null_terminated_array16_from_str(comm.as_str());
         skel.maps_mut()
             .filter_comm()
             .update(&comm, &zero.to_ne_bytes(), MapFlags::ANY)?;
@@ -310,7 +316,7 @@ fn main() -> Result<()> {
         let fake_exec_event = past_types::process_exec_event {
             timestamp: uptime.as_nanos() as u64,
             tgid: proc.tgid as u32,
-            comm: *proc.comm,
+            comm: proc.comm,
             ..Default::default()
         };
         program.on_event(Received::ProcessExec(&fake_exec_event))?;
@@ -331,7 +337,7 @@ fn main() -> Result<()> {
                     let fake_exec_event = past_types::process_exec_event {
                         timestamp: uptime.as_nanos() as u64,
                         tgid: comm.tgid as u32,
-                        comm: *comm.comm,
+                        comm: comm.comm,
                         ..Default::default()
                     };
                     program.on_event(Received::ProcessExec(&fake_exec_event))?;
@@ -456,7 +462,7 @@ fn parse_uptime() -> anyhow::Result<Duration> {
 #[derive(Debug)]
 struct Proc {
     tgid: i32,
-    comm: Comm,
+    comm: [u8; 16],
 }
 
 fn scan_proc(comms: &HashSet<&str>) -> Result<Vec<Proc>> {
@@ -475,7 +481,7 @@ fn scan_proc(comms: &HashSet<&str>) -> Result<Vec<Proc>> {
             if comms.contains(trimmed) {
                 rst.push(Proc {
                     tgid: tgid as i32,
-                    comm: Comm::from(trimmed),
+                    comm: null_terminated_array16_from_str(trimmed),
                 });
             }
         }
@@ -483,21 +489,8 @@ fn scan_proc(comms: &HashSet<&str>) -> Result<Vec<Proc>> {
     Ok(rst)
 }
 
-#[derive(Debug)]
-struct Comm([u8; 16]);
-
-impl From<&str> for Comm {
-    fn from(s: &str) -> Self {
-        let mut comm = [0; 16];
-        comm[..s.len()].copy_from_slice(s.as_bytes());
-        Self(comm)
-    }
-}
-
-impl Deref for Comm {
-    type Target = [u8; 16];
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+fn null_terminated_array16_from_str(s: &str) -> [u8; 16] {
+    let mut comm = [0; 16];
+    comm[..s.len()].copy_from_slice(s.as_bytes());
+    comm
 }
