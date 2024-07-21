@@ -2399,6 +2399,7 @@ name = "pastconv"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "blazesym",
  "bytes 1.6.0",
  "clap",
  "datafusion",

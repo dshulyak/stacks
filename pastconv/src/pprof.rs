@@ -1,6 +1,7 @@
-use std::{collections::HashMap, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use std::{borrow::Cow, collections::HashMap, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
+use blazesym::symbolize::{self, Elf, Input, Source, Symbolized};
 use datafusion::{
     arrow::{
         array::{Array, AsArray, ListArray, RecordBatch},
@@ -33,13 +34,15 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
         let addresses = sampled_stack.addresses();
-        for (stack, addr) in sampled_stack.stacks().zip(addresses) {
-            match functions.get_or_insert(stack) {
+        let offsets = sampled_stack.offsets();
+        for ((stack, addr), offset) in sampled_stack.stacks().zip(addresses).zip(offsets) {
+            let stack = format!("{}-{:x}", stack, offset);
+            match functions.get_or_insert(stack.as_str()) {
                 DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
                 DictionaryEntry::New(function_id) => {
                     let function = proto::Function {
                         id: function_id as u64,
-                        name: *strings.get_or_insert(stack),
+                        name: *strings.get_or_insert(stack.as_str()),
                         ..Default::default()
                     };
                     let line = proto::Line {
@@ -48,7 +51,105 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
                     };
                     let location = proto::Location {
                         id: function_id as u64,
-                        address: addr,
+                        address: addr + offset,
+                        line: vec![line],
+                        ..Default::default()
+                    };
+                    function_table.push(function);
+                    location_table.push(location);
+                    locations.push(function_id as u64);
+                }
+            }
+        }
+        let sample = proto::Sample {
+            location_id: locations,
+            value: vec![sampled_stack.count, sampled_stack.duration],
+            ..Default::default()
+        };
+        samples_table.push(sample);
+        duration += sampled_stack.duration;
+    }
+    let count_value_type = proto::ValueType {
+        r#type: *strings.get_or_insert(COUNT),
+        unit: *strings.get_or_insert(SAMPLES),
+    };
+    let time_value_type = proto::ValueType {
+        r#type: *strings.get_or_insert(SAMPLED_CPU),
+        unit: *strings.get_or_insert(NS),
+    };
+    let profile = proto::Profile {
+        sample_type: vec![count_value_type, time_value_type],
+        sample: samples_table,
+        string_table: strings.strings_table(),
+        location: location_table,
+        function: function_table,
+        time_nanos: start,
+        duration_nanos: duration,
+        ..Default::default()
+    };
+    Ok(profile)
+}
+
+async fn generate_pprof_with_symbolization(
+    ctx: &SessionContext,
+    query: &str,
+    binary: PathBuf,
+) -> Result<proto::Profile> {
+    let batch = Batch(ctx.sql(query).await?.collect().await?);
+    let mut strings = PprofStringDictionary::new_strings();
+    let mut functions = PprofStringDictionary::new_functions();
+    let mut function_table = vec![];
+    let mut location_table = vec![];
+    let mut samples_table = vec![];
+    let mut duration = 0;
+
+    let symbolizer = symbolize::Symbolizer::builder().build();
+    let source = Source::Elf(Elf {
+        path: binary,
+        debug_syms: true,
+        _non_exhaustive: (),
+    });
+
+    let start: i64 = get_start_time(ctx).await?;
+    for sampled_stack in batch.iter() {
+        let mut locations = vec![];
+        let addresses = sampled_stack.addresses().collect::<Vec<u64>>();
+        let offsets = sampled_stack.offsets().collect::<Vec<u64>>();
+        let addresses_with_offset = addresses
+            .iter()
+            .zip(offsets.iter())
+            .map(|(addr, offset)| addr + offset)
+            .collect::<Vec<u64>>();
+        let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
+        for (stack, symbolized, addr, offset) in multizip((sampled_stack.stacks(), symbolized, addresses, offsets)) {
+            println!("-------++++++");
+            println!("COLLECTED\n{} {} {}", stack, addr, offset);
+            let stack = match symbolized {
+                Symbolized::Sym(sym) => {
+                    println!("SYMBOLIZED");
+                    println!("{} {} {}", sym.name, sym.addr, sym.offset);
+                    for line in sym.inlined.iter() {
+                        println!("    {}", line.name);
+                    }
+                    sym.name
+                }
+                Symbolized::Unknown(_) => Cow::Borrowed(stack),
+            };
+
+            match functions.get_or_insert(stack.as_ref()) {
+                DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
+                DictionaryEntry::New(function_id) => {
+                    let function = proto::Function {
+                        id: function_id as u64,
+                        name: *strings.get_or_insert(stack.as_ref()),
+                        ..Default::default()
+                    };
+                    let line = proto::Line {
+                        function_id: function_id as u64,
+                        ..Default::default()
+                    };
+                    let location = proto::Location {
+                        id: function_id as u64,
                         line: vec![line],
                         ..Default::default()
                     };
@@ -102,14 +203,21 @@ impl Batch {
                 .as_primitive_opt::<UInt64Type>()
                 .expect("duration should be uint64");
             let address = batch.column(3).as_any().downcast_ref::<ListArray>().unwrap();
-            multizip((count.iter(), stacks.iter(), address.iter(), duration.iter())).map(
-                |(count, stacks, address, duration)| Stacks {
-                    count: count.unwrap_or(0),
-                    stacks: stacks.clone(),
-                    duration: duration.unwrap_or(0) as i64,
-                    addresses: address.clone(),
-                },
-            )
+            let offsets = batch.column(4).as_any().downcast_ref::<ListArray>().unwrap();
+            multizip((
+                count.iter(),
+                stacks.iter(),
+                address.iter(),
+                offsets.iter(),
+                duration.iter(),
+            ))
+            .map(|(count, stacks, address, offsets, duration)| Stacks {
+                count: count.unwrap_or(0),
+                stacks,
+                duration: duration.unwrap_or(0) as i64,
+                addresses: address,
+                offsets,
+            })
         })
     }
 }
@@ -119,11 +227,21 @@ struct Stacks {
     duration: i64,
     stacks: Option<Arc<dyn Array>>,
     addresses: Option<Arc<dyn Array>>,
+    offsets: Option<Arc<dyn Array>>,
 }
 
 impl Stacks {
     fn addresses(&self) -> impl Iterator<Item = u64> + '_ {
         self.addresses
+            .as_ref()
+            .unwrap()
+            .as_primitive::<UInt64Type>()
+            .iter()
+            .map(|x| x.unwrap())
+    }
+
+    fn offsets(&self) -> impl Iterator<Item = u64> + '_ {
+        self.offsets
             .as_ref()
             .unwrap()
             .as_primitive::<UInt64Type>()
@@ -232,13 +350,24 @@ async fn get_start_time(ctx: &SessionContext) -> Result<i64> {
     Ok(min_timestamp as i64)
 }
 
-pub(crate) async fn pprof(register: &str, destination: &PathBuf, query: &str, command: Option<&str>) -> Result<()> {
+pub(crate) async fn pprof(
+    register: &str,
+    destination: &PathBuf,
+    query: &str,
+    command: Option<&str>,
+    binary: Option<PathBuf>,
+) -> Result<()> {
     let mut query = query.to_owned();
     if let Some(command) = command {
         query = query.replace(COMMAND_BINDING, command);
     }
     let ctx = session(register).await?;
-    let profile = generate_pprof(&ctx, &query).await?;
+
+    let profile = if let Some(binary) = binary {
+        generate_pprof_with_symbolization(&ctx, &query, binary).await?
+    } else {
+        generate_pprof(&ctx, &query).await?
+    };
     let mut f = std::fs::File::create(destination)?;
     let mut buf = vec![];
     profile.encode(&mut buf)?;
