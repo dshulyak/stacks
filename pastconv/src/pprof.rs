@@ -32,7 +32,8 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
     let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
-        for stack in sampled_stack.stacks() {
+        let addresses = sampled_stack.addresses();
+        for (stack, addr) in sampled_stack.stacks().zip(addresses) {
             match functions.get_or_insert(stack) {
                 DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
                 DictionaryEntry::New(function_id) => {
@@ -47,6 +48,7 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
                     };
                     let location = proto::Location {
                         id: function_id as u64,
+                        address: addr,
                         line: vec![line],
                         ..Default::default()
                     };
@@ -99,11 +101,15 @@ impl Batch {
                 .column(2)
                 .as_primitive_opt::<UInt64Type>()
                 .expect("duration should be uint64");
-            multizip((count.iter(), stacks.iter(), duration.iter())).map(|(count, stacks, duration)| Stacks {
-                count: count.unwrap_or(0),
-                stacks: stacks.clone(),
-                duration: duration.unwrap_or(0) as i64,
-            })
+            let address = batch.column(3).as_any().downcast_ref::<ListArray>().unwrap();
+            multizip((count.iter(), stacks.iter(), address.iter(), duration.iter())).map(
+                |(count, stacks, address, duration)| Stacks {
+                    count: count.unwrap_or(0),
+                    stacks: stacks.clone(),
+                    duration: duration.unwrap_or(0) as i64,
+                    addresses: address.clone(),
+                },
+            )
         })
     }
 }
@@ -112,9 +118,19 @@ struct Stacks {
     count: i64,
     duration: i64,
     stacks: Option<Arc<dyn Array>>,
+    addresses: Option<Arc<dyn Array>>,
 }
 
 impl Stacks {
+    fn addresses(&self) -> impl Iterator<Item = u64> + '_ {
+        self.addresses
+            .as_ref()
+            .unwrap()
+            .as_primitive::<UInt64Type>()
+            .iter()
+            .map(|x| x.unwrap())
+    }
+
     fn stacks(&self) -> impl Iterator<Item = &str> + '_ {
         self.stacks
             .as_ref()
@@ -216,7 +232,7 @@ async fn get_start_time(ctx: &SessionContext) -> Result<i64> {
     Ok(min_timestamp as i64)
 }
 
-pub async fn pprof(register: &str, destination: &PathBuf, query: &str, command: Option<&str>) -> Result<()> {
+pub(crate) async fn pprof(register: &str, destination: &PathBuf, query: &str, command: Option<&str>) -> Result<()> {
     let mut query = query.to_owned();
     if let Some(command) = command {
         query = query.replace(COMMAND_BINDING, command);
