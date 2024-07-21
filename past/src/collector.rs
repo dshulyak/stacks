@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::Result;
 use blazesym::symbolize::{self, Input, Kernel, Process, Source, Symbolized};
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
 use plain::Plain;
 use tracing::{debug, instrument, warn};
 
@@ -271,7 +271,8 @@ pub(crate) trait Frames {
 
 #[instrument(skip_all)]
 pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
-    let mut addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
+    let mut kernel_addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
+    let mut user_addresses: HashMap<(i32, u64), (Bytes, u64, u64)> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
     let mut unique = HashSet::new();
     let traces: HashMap<i32, Result<Vec<u64>>> = kstacks
@@ -297,7 +298,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         Ok(syms) => {
             for (symbol, addr) in syms.into_iter().zip(req.into_iter()) {
                 if let Some(sym) = symbol.as_sym() {
-                    addresses.insert((-1, addr), Bytes::copy_from_slice(sym.name.as_bytes()));
+                    kernel_addresses.insert((-1, addr), Bytes::copy_from_slice(sym.name.as_bytes()));
                 }
             }
         }
@@ -341,16 +342,10 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         };
         for (symbol, addr) in symbols.into_iter().zip(req.into_iter()) {
             if let Some(sym) = symbol.as_sym() {
-                let name = sym.name.as_bytes();
-                let offset = sym.offset.to_string();
-                let offset: &[u8] = offset.as_bytes();
-                let mut buf: BytesMut = BytesMut::with_capacity(name.len() + offset.len() + 1);
-                buf.extend_from_slice(name);
-                if sym.offset > 0 {
-                    buf.extend_from_slice(b"+");
-                    buf.extend_from_slice(offset);
-                }
-                addresses.insert((tgid, addr), buf.into());
+                user_addresses.insert(
+                    (tgid, addr),
+                    (Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64),
+                );
             }
         }
     }
@@ -361,8 +356,8 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
     let zipped = original_kstacks.into_iter().zip(original_ustacks);
     for (kstack_id, (tgid, ustack_id)) in zipped {
         match (
-            to_symbols(&ustack_traces, &addresses, tgid, ustack_id),
-            to_symbols(&traces, &addresses, -1, kstack_id),
+            to_user_symbols(&ustack_traces, &user_addresses, tgid, ustack_id),
+            to_symbols(&traces, &kernel_addresses, -1, kstack_id),
         ) {
             (Some(ustacks), Some(kstacks)) => {
                 stack_group.resolve(ustacks, kstacks);
@@ -378,6 +373,24 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
             }
         }
     }
+}
+
+fn to_user_symbols<'a>(
+    traces: &'a HashMap<i32, Result<Vec<u64>>>,
+    addresses: &'a HashMap<(i32, u64), (Bytes, u64, u64)>,
+    tgid: i32,
+    stack_id: i32,
+) -> Option<impl Iterator<Item = (Bytes, u64, u64)> + 'a> {
+    stack_id.checked_sub(1).and_then(move |stack_id| {
+        traces.get(&(stack_id + 1)).and_then(move |trace| {
+            trace.as_ref().ok().map(move |trace| {
+                trace
+                    .iter()
+                    .filter(|frame| **frame > 0)
+                    .flat_map(move |&frame| addresses.get(&(tgid, frame)).cloned())
+            })
+        })
+    })
 }
 
 fn to_symbols<'a>(
@@ -433,7 +446,11 @@ pub(crate) struct BlazesymSymbolizer {
 impl Symbolizer for BlazesymSymbolizer {
     fn new() -> Self {
         Self {
-            kernel_symbolizer: symbolize::Symbolizer::builder().enable_auto_reload(false).build(),
+            kernel_symbolizer: symbolize::Symbolizer::builder()
+                .enable_code_info(false)
+                .enable_inlined_fns(false)
+                .enable_auto_reload(false)
+                .build(),
             executable_symbolizers: HashMap::new(),
             process_symbolizers: HashMap::new(),
         }
@@ -452,7 +469,11 @@ impl Symbolizer for BlazesymSymbolizer {
             self.process_symbolizers.insert(tgid, symboliser.clone());
             return Ok(());
         } else {
-            let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
+            let symbolizer = symbolize::Symbolizer::builder()
+                .enable_code_info(false)
+                .enable_inlined_fns(false)
+                .enable_auto_reload(false)
+                .build();
             let symboliser = Rc::new(ExecutableSymbolizer {
                 symbolizer,
                 exe: exe.clone(),

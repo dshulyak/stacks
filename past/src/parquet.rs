@@ -66,6 +66,8 @@ fn events_schema() -> types::Type {
         required binary command (UTF8);
         required binary trace_name (UTF8);
         repeated binary ustack (UTF8);
+        repeated int64 ustack_address (INTEGER(64, false));
+        repeated int64 ustack_offset (INTEGER(64, false));
         repeated binary kstack (UTF8);
     }
     ",
@@ -150,7 +152,7 @@ pub(crate) struct Group {
     command: Vec<ByteArray>,
     trace_name: Vec<ByteArray>,
 
-    ustack: RepeatedStack,
+    ustack: RepeatedStackWithAddress,
     kstack: RepeatedStack,
 
     unresolved_ustack: Vec<i32>,
@@ -175,8 +177,10 @@ impl Group {
             amount: Vec::with_capacity(capacity),
             command: Vec::with_capacity(capacity),
             trace_name: Vec::with_capacity(capacity),
-            ustack: RepeatedStack {
+            ustack: RepeatedStackWithAddress {
                 stacks: Vec::with_capacity(capacity),
+                address: Vec::with_capacity(capacity),
+                offset: Vec::with_capacity(capacity),
                 repetition_levels: Vec::with_capacity(capacity),
                 definition_levels: Vec::with_capacity(capacity),
             },
@@ -369,6 +373,8 @@ impl Group {
         self.command.clear();
         self.trace_name.clear();
         self.ustack.stacks.clear();
+        self.ustack.address.clear();
+        self.ustack.offset.clear();
         self.ustack.repetition_levels.clear();
         self.ustack.definition_levels.clear();
         self.kstack.stacks.clear();
@@ -396,13 +402,19 @@ impl Group {
         self.unresolved_kstack.iter().copied()
     }
 
-    pub(crate) fn resolve(&mut self, ustacks: impl Iterator<Item = Bytes>, kstacks: impl Iterator<Item = Bytes>) {
+    pub(crate) fn resolve(
+        &mut self,
+        ustacks: impl Iterator<Item = (Bytes, u64, u64)>,
+        kstacks: impl Iterator<Item = Bytes>,
+    ) {
         let mut rep_level = 0;
         for stack in ustacks {
             self.ustack.repetition_levels.push(rep_level);
             rep_level = 1;
             self.ustack.definition_levels.push(1);
-            self.ustack.stacks.push(stack.into());
+            self.ustack.stacks.push(stack.0.into());
+            self.ustack.address.push(stack.1 as i64);
+            self.ustack.offset.push(stack.2 as i64);
         }
         if rep_level == 0 {
             self.ustack.repetition_levels.push(0);
@@ -540,6 +552,28 @@ impl<W: Write + Send> GroupWriter<W> {
             .context("ustack")?;
         ustack.close().context("close ustack")?;
 
+        let mut ustack_address = rows.next_column()?.expect("ustack_address column");
+        ustack_address
+            .typed::<Int64Type>()
+            .write_batch(
+                &group.ustack.address,
+                Some(&group.ustack.definition_levels),
+                Some(&group.ustack.repetition_levels),
+            )
+            .context("ustack_address")?;
+        ustack_address.close().context("close ustack_address")?;
+
+        let mut ustack_offset = rows.next_column()?.expect("ustack_offset column");
+        ustack_offset
+            .typed::<Int64Type>()
+            .write_batch(
+                &group.ustack.offset,
+                Some(&group.ustack.definition_levels),
+                Some(&group.ustack.repetition_levels),
+            )
+            .context("ustack_offset")?;
+        ustack_offset.close().context("close ustack_offset")?;
+
         let mut kstack = rows.next_column()?.expect("kstack column");
         kstack
             .typed::<ByteArrayType>()
@@ -564,6 +598,15 @@ impl<W: Write + Send> GroupWriter<W> {
 #[derive(Debug)]
 struct RepeatedStack {
     stacks: Vec<ByteArray>,
+    repetition_levels: Vec<i16>,
+    definition_levels: Vec<i16>,
+}
+
+#[derive(Debug)]
+struct RepeatedStackWithAddress {
+    stacks: Vec<ByteArray>,
+    address: Vec<i64>,
+    offset: Vec<i64>,
     repetition_levels: Vec<i16>,
     definition_levels: Vec<i16>,
 }
