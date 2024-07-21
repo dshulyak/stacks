@@ -11,7 +11,7 @@ use anyhow::Result;
 use blazesym::symbolize::{self, Input, Kernel, Process, Source, Symbolized};
 use bytes::Bytes;
 use plain::Plain;
-use tracing::{debug, instrument, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::{
     parquet::{Event, Group},
@@ -342,6 +342,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         };
         for (symbol, addr) in symbols.into_iter().zip(req.into_iter()) {
             if let Some(sym) = symbol.as_sym() {
+                info!("symbol {:?}", sym);
                 user_addresses.insert(
                     (tgid, addr),
                     (Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64),
@@ -469,11 +470,7 @@ impl Symbolizer for BlazesymSymbolizer {
             self.process_symbolizers.insert(tgid, symboliser.clone());
             return Ok(());
         } else {
-            let symbolizer = symbolize::Symbolizer::builder()
-                .enable_code_info(false)
-                .enable_inlined_fns(false)
-                .enable_auto_reload(false)
-                .build();
+            let symbolizer = symbolize::Symbolizer::builder().enable_auto_reload(false).build();
             let symboliser = Rc::new(ExecutableSymbolizer {
                 symbolizer,
                 exe: exe.clone(),

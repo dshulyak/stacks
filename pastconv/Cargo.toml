@@ -13,6 +13,8 @@ bytes = "1.6.0"
 humantime = "2.1.0"
 prost = "0.12"
 itertools = "0.13.0"
+# i don't need to use my fork here, just do that for consistency
+blazesym = { git = "https://github.com/dshulyak/blazesym.git", branch = "v0.2.0-alpha.12-caching" }
 
 [build-dependencies]
 prost-build = "0.5"

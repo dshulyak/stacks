@@ -25,6 +25,8 @@ enum Command {
     Pprof {
         #[clap(short, long, global = true, default_value = "/tmp/pprof.pb")]
         destination: PathBuf,
+        #[clap(short, long, global = true, help = "path to the binary file")]
+        binary: Option<PathBuf>,
         #[clap(subcommand)]
         cmd: PprofCommand,
     },
@@ -61,19 +63,19 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     match opt.cmd {
-        Command::Pprof { destination, cmd } => match cmd {
+        Command::Pprof { destination, cmd, binary } => match cmd {
             PprofCommand::Cpu { command } => {
-                pprof::pprof(&opt.register, &destination, CPU_PPROF_SQL, Some(&command)).await
+                pprof::pprof(&opt.register, &destination, CPU_PPROF_SQL, Some(&command), binary).await
             }
             PprofCommand::Offcpu { command } => {
-                pprof::pprof(&opt.register, &destination, OFFCPU_PPROF_SQL, Some(&command)).await
+                pprof::pprof(&opt.register, &destination, OFFCPU_PPROF_SQL, Some(&command), binary).await
             }
             PprofCommand::Rss { command } => {
-                pprof::pprof(&opt.register, &destination, RSS_PPROF_SQL, Some(&command)).await
+                pprof::pprof(&opt.register, &destination, RSS_PPROF_SQL, Some(&command), binary).await
             }
             PprofCommand::Raw { query_file } => {
                 let query = std::fs::read_to_string(query_file)?;
-                pprof::pprof(&opt.register, &destination, &query, None).await
+                pprof::pprof(&opt.register, &destination, &query, None, binary).await
             }
         },
     }
