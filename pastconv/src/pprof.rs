@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, io::Write, ops::Deref, path::PathBuf, sync::Arc};
 
 use anyhow::Result;
 use blazesym::symbolize::{self, Elf, Input, Source, Symbolized};
@@ -96,6 +96,14 @@ async fn generate_pprof_with_symbolization(
     binary: PathBuf,
 ) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
+    let columns: Vec<String> = batch.0[0]
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect::<Vec<_>>();
+    println!("columns: {:?}", columns);
+
     let mut strings = PprofStringDictionary::new_strings();
     let mut functions = PprofStringDictionary::new_functions();
     let mut function_table = vec![];
@@ -122,35 +130,41 @@ async fn generate_pprof_with_symbolization(
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
         for (stack, symbolized, addr, offset) in multizip((sampled_stack.stacks(), symbolized, addresses, offsets)) {
-            println!("-------++++++");
-            println!("COLLECTED\n{} {} {}", stack, addr, offset);
-            let stack = match symbolized {
-                Symbolized::Sym(sym) => {
-                    println!("SYMBOLIZED");
-                    println!("{} {} {}", sym.name, sym.addr, sym.offset);
-                    for line in sym.inlined.iter() {
-                        println!("    {}", line.name);
-                    }
-                    sym.name
-                }
-                Symbolized::Unknown(_) => Cow::Borrowed(stack),
-            };
-
             match functions.get_or_insert(stack.as_ref()) {
-                DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
-                DictionaryEntry::New(function_id) => {
-                    let function = proto::Function {
+                DictionaryEntry::Existing(location_id) => locations.push(location_id as u64),
+                DictionaryEntry::New(location_id) => {
+                    // location and function id is the same here
+                    let function_id = location_id;
+
+                    let mut function = proto::Function {
                         id: function_id as u64,
                         name: *strings.get_or_insert(stack.as_ref()),
                         ..Default::default()
                     };
-                    let line = proto::Line {
+                    let mut line = proto::Line {
                         function_id: function_id as u64,
                         ..Default::default()
                     };
+
+                    let mut lines = vec![];
+                    if let Symbolized::Sym(sym) = symbolized {
+                        if let Some(code_info) = sym.code_info {
+                            if let Some(code_line) = code_info.line {
+                                line.line = code_line as i64;
+                            }
+                            if let Some(column) = code_info.column {
+                                line.column = column as i64;
+                            }
+                            if let Some(path) = code_info.to_path().as_os_str().to_str() {
+                                function.filename = *strings.get_or_insert(path);
+                            }
+                        }
+                    }
+                    lines.push(line);
                     let location = proto::Location {
                         id: function_id as u64,
-                        line: vec![line],
+                        address: addr + offset,    
+                        line: lines,
                         ..Default::default()
                     };
                     function_table.push(function);
@@ -168,12 +182,12 @@ async fn generate_pprof_with_symbolization(
         duration += sampled_stack.duration;
     }
     let count_value_type = proto::ValueType {
-        r#type: *strings.get_or_insert(COUNT),
-        unit: *strings.get_or_insert(SAMPLES),
+        r#type: *strings.get_or_insert(columns[1].as_str()),
+        ..Default::default()
     };
     let time_value_type = proto::ValueType {
-        r#type: *strings.get_or_insert(SAMPLED_CPU),
-        unit: *strings.get_or_insert(NS),
+        r#type: *strings.get_or_insert(columns[2].as_str()),
+        ..Default::default()
     };
     let profile = proto::Profile {
         sample_type: vec![count_value_type, time_value_type],

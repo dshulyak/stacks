@@ -1,6 +1,8 @@
 with rss_growth as (
     select
         ustack,
+        ustack_address,
+        ustack_offset,
         amount,
         LAG(amount) OVER (
             PARTITION BY tgid
@@ -16,13 +18,15 @@ with rss_growth as (
 )
 select
     ustack,
-    count(*) as cnt,
-    sum(amount - prev_amount) as total_rss
+    count(*) as count,
+    sum(amount - prev_amount) as total_rss,
+    ustack_address,
+    ustack_offset 
 from
     rss_growth
 where
     amount > prev_amount
 group by
-    ustack
+    ustack, ustack_address, ustack_offset
 order by
     total_rss desc
