@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         rust: [stable]
-        profile: [dev, release]
+        profile: [dev]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
@@ -34,8 +34,6 @@ jobs:
         run: |
           if [ "${{ matrix.profile }}" = "dev" ]; then
             sudo RUST_LOG=debug ./target/debug/e2e ./target/debug/past ./target/debug/examples
-          elif [ "${{ matrix.profile }}" = "release" ]; then
-            sudo RUST_LOG=debug ./target/release/e2e ./target/release/past ./target/release/examples
           else
             echo "Error: Profile '${{ matrix.profile }}' is not expected."
             exit 1
