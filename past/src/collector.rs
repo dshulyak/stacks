@@ -500,9 +500,15 @@ impl Symbolizer for BlazesymSymbolizer {
     }
 
     fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
-        debug!("symbolizer for tgid={} can be dropped after symbolization", tgid);
         if let Some(symbolizer) = self.process_symbolizers.remove(&tgid) {
-            if Rc::strong_count(&symbolizer) == 1 {
+            debug!(
+                "dropping symbolized reference for tgid={}, counter {}",
+                tgid,
+                Rc::strong_count(&symbolizer)
+            );
+            // last one was removed from process_symbolizers and one left in executable_symbolizers
+            if Rc::strong_count(&symbolizer) <= 2 {
+                debug!("symbolizer for exe={} dropped", symbolizer.exe);
                 self.executable_symbolizers
                     .remove(&(symbolizer.exe.clone(), symbolizer.mtime));
             }
