@@ -1,4 +1,10 @@
-use std::{collections::HashMap, io::Write, ops::Deref, path::PathBuf, sync::Arc};
+use std::{
+    collections::{hash_map, HashMap},
+    io::Write,
+    ops::Deref,
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::Result;
 use blazesym::symbolize::{self, Elf, Input, Source, Symbolized};
@@ -102,10 +108,11 @@ async fn generate_pprof_with_symbolization(
         .iter()
         .map(|f| f.name().clone())
         .collect::<Vec<_>>();
-    println!("columns: {:?}", columns);
 
     let mut strings = PprofStringDictionary::new_strings();
     let mut functions = PprofStringDictionary::new_functions();
+    let mut location_addr_to_index = HashMap::new();
+    let mut last_location = 1; // 0 is reserved
     let mut function_table = vec![];
     let mut location_table = vec![];
     let mut samples_table = vec![];
@@ -130,23 +137,34 @@ async fn generate_pprof_with_symbolization(
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
         for (stack, symbolized, addr, offset) in multizip((sampled_stack.stacks(), symbolized, addresses, offsets)) {
-            match functions.get_or_insert(stack.as_ref()) {
-                DictionaryEntry::Existing(location_id) => locations.push(location_id as u64),
-                DictionaryEntry::New(location_id) => {
-                    // location and function id is the same here
-                    let function_id = location_id;
-
+            let function_id = match functions.get_or_insert(stack.as_ref()) {
+                DictionaryEntry::Existing(function_id) => function_id,
+                DictionaryEntry::New(function_id) => {
                     let mut function = proto::Function {
                         id: function_id as u64,
                         name: *strings.get_or_insert(stack.as_ref()),
                         ..Default::default()
                     };
+                    if let Symbolized::Sym(sym) = &symbolized {
+                        if let Some(code_info) = &sym.code_info {
+                            if let Some(path) = code_info.to_path().as_os_str().to_str() {
+                                function.filename = *strings.get_or_insert(path);
+                            }
+                        }
+                    }
+                    function_table.push(function);
+                    function_id
+                }
+            };
+            match location_addr_to_index.entry(addr + offset) {
+                hash_map::Entry::Occupied(entry) => {
+                    locations.push(*entry.get() as u64);
+                }
+                hash_map::Entry::Vacant(entry) => {
                     let mut line = proto::Line {
                         function_id: function_id as u64,
                         ..Default::default()
                     };
-
-                    let mut lines = vec![];
                     if let Symbolized::Sym(sym) = symbolized {
                         if let Some(code_info) = sym.code_info {
                             if let Some(code_line) = code_info.line {
@@ -155,21 +173,18 @@ async fn generate_pprof_with_symbolization(
                             if let Some(column) = code_info.column {
                                 line.column = column as i64;
                             }
-                            if let Some(path) = code_info.to_path().as_os_str().to_str() {
-                                function.filename = *strings.get_or_insert(path);
-                            }
                         }
                     }
-                    lines.push(line);
                     let location = proto::Location {
-                        id: function_id as u64,
-                        address: addr + offset,    
-                        line: lines,
+                        id: last_location as u64,
+                        address: addr + offset,
+                        line: vec![line],
                         ..Default::default()
                     };
-                    function_table.push(function);
                     location_table.push(location);
-                    locations.push(function_id as u64);
+                    locations.push(last_location as u64);
+                    entry.insert(last_location);
+                    last_location += 1;
                 }
             }
         }
