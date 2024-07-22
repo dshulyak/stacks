@@ -77,8 +77,8 @@ struct Opt {
 
     #[clap(
         long,
-        default_value = "1048576",
-        help = "define size of the queue for all events. each event in the queue is 64 bytes"
+        default_value = "33554432",
+        help = "define size in bytes of the ring buffer for events."
     )]
     bpf_events: u32,
 
@@ -224,7 +224,7 @@ fn main() -> Result<()> {
     open_skel
         .maps_mut()
         .events()
-        .set_max_entries(64 * opt.bpf_events)
+        .set_max_entries(opt.bpf_events)
         .unwrap();
     open_skel.maps_mut().stackmap().set_max_entries(opt.bpf_stacks).unwrap();
 
