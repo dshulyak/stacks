@@ -1,7 +1,7 @@
 select
     ustack,
-    count(*),
-    sum(duration),
+    count(*) as count,
+    sum(duration) as sampled_duration,
     ustack_address,
     ustack_offset
 from
