@@ -42,6 +42,9 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
         let addresses = sampled_stack.addresses();
         let offsets = sampled_stack.offsets();
         for ((stack, addr), offset) in sampled_stack.stacks().zip(addresses).zip(offsets) {
+            // if we have line information we will see the difference by looking at source.
+            // without binary/debuginfo there is no clear way to see that samples are actually
+            // collected from different addresses, for this purpose i am adding offset to the name explicitly
             let stack = format!("{}-{:x}", stack, offset);
             match functions.get_or_insert(stack.as_str()) {
                 DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
