@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::HashMap, path::Path, sync::Arc};
 
 use anyhow::Result;
 use blazesym::symbolize::{Reason, Sym, Symbolized};
+use bytes::Bytes;
 use datafusion::{
     arrow::{
         array::{AsArray, ListArray, RecordBatch},
@@ -80,15 +81,15 @@ impl Symbolizer for TestSymbolizer {
         }
     }
 
-    fn init_symbolizer(&mut self, _tgid: u32) -> anyhow::Result<()> {
-        Ok(())
+    fn init_symbolizer(&mut self, _tgid: u32) -> Result<Bytes> {
+        Ok(Bytes::default())
     }
 
     fn drop_symbolizer(&mut self, _tgid: u32) -> Result<()> {
         Ok(())
     }
 
-    fn symbolize_kernel(&self, addrs: &[u64]) -> anyhow::Result<Vec<blazesym::symbolize::Symbolized>> {
+    fn symbolize_kernel(&self, addrs: &[u64]) -> Result<Vec<blazesym::symbolize::Symbolized>> {
         let rst = addrs
             .iter()
             .map(|addr| match self.symbols.get(addr) {
@@ -107,7 +108,7 @@ impl Symbolizer for TestSymbolizer {
         Ok(rst)
     }
 
-    fn symbolize_process(&self, _tgid: u32, addr: &[u64]) -> anyhow::Result<Vec<Symbolized>> {
+    fn symbolize_process(&self, _tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
         self.symbolize_kernel(addr)
     }
 }

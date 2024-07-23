@@ -7,13 +7,16 @@ use std::{
 };
 
 use anyhow::Result;
-use blazesym::symbolize::{self, Elf, Input, Source, Symbolized};
+use blazesym::{
+    helper::read_elf_build_id,
+    symbolize::{self, Elf, Input, Source, Symbolized},
+};
 use datafusion::{
     arrow::{
         array::{Array, AsArray, ListArray, RecordBatch},
         datatypes::{Int64Type, UInt64Type},
     },
-    execution::context::SessionContext,
+    prelude::SessionContext,
 };
 use itertools::multizip;
 use prost::Message;
@@ -27,6 +30,7 @@ mod proto {
 const START_TIME: &str = include_str!("sql/start_time.sql");
 
 const COMMAND_BINDING: &str = "?command";
+const BUILID_BINDING: &str = "?buildid";
 
 async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
@@ -371,6 +375,16 @@ pub(crate) async fn pprof(
     let mut query = query.to_owned();
     if let Some(command) = command {
         query = query.replace(COMMAND_BINDING, command);
+    }
+    if let Some(path) = &binary {
+        if let Some(buildid) = read_elf_build_id(path)? {
+            let buildid = buildid.as_ref().iter().fold(Vec::new(), |mut acc, &byte| {
+                write!(&mut acc, "{:02x}", byte).unwrap();
+                acc
+            });
+            let buildid = String::from_utf8(buildid)?;
+            query = query.replace(BUILID_BINDING, &buildid);
+        }
     }
     let ctx = session(register).await?;
 

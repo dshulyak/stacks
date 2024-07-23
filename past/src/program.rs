@@ -35,6 +35,12 @@ pub(crate) struct Stats {
     pub missing_stacks_counter: HashMap<i32, usize>,
 }
 
+#[derive(Debug)]
+pub(crate) struct ProcessInfo {
+    pub(crate) command: Bytes,
+    pub(crate) buildid: Bytes,
+}
+
 pub(crate) struct Program<Fr: Frames, Sym: Symbolizer> {
     cfg: Config,
     writer: Option<GroupWriter<File>>,
@@ -43,7 +49,7 @@ pub(crate) struct Program<Fr: Frames, Sym: Symbolizer> {
     symbolizer: Sym,
     // cleanup should occur after frames from last batch were collected
     symbolizer_tgid_cleanup: HashSet<u32>,
-    tgid_to_command: HashMap<u32, Bytes>,
+    tgid_to_command: HashMap<u32, ProcessInfo>,
     stats: Stats,
 }
 
@@ -93,10 +99,30 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         // this is hotfix for ci
         match event {
             Received::ProcessExec(event) => {
-                _ = command(&mut self.tgid_to_command, event.tgid, event.comm.as_slice());
-                if let Err(err) = self.symbolizer.init_symbolizer(event.tgid) {
-                    warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
-                }
+                let buildid = match self.symbolizer.init_symbolizer(event.tgid) {
+                    Ok(builid) => builid,
+                    Err(err) => {
+                        warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
+                        Bytes::default()
+                    }
+                };
+                let comm = null_terminated(&event.comm);
+                match self.tgid_to_command.entry(event.tgid) {
+                    hash_map::Entry::Vacant(vacant) => {
+                        vacant.insert(ProcessInfo {
+                            command: Bytes::copy_from_slice(comm),
+                            buildid,
+                        });
+                    }
+                    hash_map::Entry::Occupied(mut occupied) => {
+                        if occupied.get().command != comm {
+                            occupied.insert(ProcessInfo {
+                                command: Bytes::copy_from_slice(comm),
+                                buildid,
+                            });
+                        }
+                    }
+                };
             }
             Received::ProcessExit(event) => {
                 self.symbolizer_tgid_cleanup.insert(event.tgid);
@@ -129,7 +155,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
             self.writer
                 .as_mut()
                 .expect("writer must exist")
-                .write(&self.collector.group)?;
+                .write(&mut self.collector.group)?;
             self.collector.group.reuse();
             for tgid in self.symbolizer_tgid_cleanup.drain() {
                 self.symbolizer.drop_symbolizer(tgid)?;
@@ -186,20 +212,6 @@ fn page_size() -> Result<u64> {
     match unsafe { libc::sysconf(libc::_SC_PAGESIZE) } {
         -1 => anyhow::bail!("sysconf _SC_PAGESIZE failed"),
         x => Ok(x as u64),
-    }
-}
-
-fn command(commands: &mut HashMap<u32, Bytes>, tgid: u32, command: &[u8]) -> Bytes {
-    let comm = null_terminated(command);
-    let existing = commands.entry(tgid);
-    match existing {
-        hash_map::Entry::Vacant(vacant) => vacant.insert(Bytes::copy_from_slice(comm)).clone(),
-        hash_map::Entry::Occupied(mut occupied) => {
-            if occupied.get() != comm {
-                occupied.insert(Bytes::copy_from_slice(comm));
-            }
-            occupied.get().clone()
-        }
     }
 }
 
