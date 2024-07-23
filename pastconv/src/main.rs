@@ -63,7 +63,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
     match opt.cmd {
-        Command::Pprof { destination, cmd, binary } => match cmd {
+        Command::Pprof {
+            destination,
+            cmd,
+            binary,
+        } => match cmd {
             PprofCommand::Cpu { command } => {
                 pprof::pprof(&opt.register, &destination, CPU_PPROF_SQL, Some(&command), binary).await
             }

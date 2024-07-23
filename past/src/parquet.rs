@@ -386,7 +386,7 @@ impl Group {
         self.ustack.offset.clear();
         self.ustack.repetition_levels.clear();
         self.ustack.definition_levels.clear();
-        
+
         self.kstack.name.clear();
         self.kstack.address.clear();
         self.kstack.offset.clear();

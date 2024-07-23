@@ -129,7 +129,7 @@ async fn generate_pprof_with_symbolization(
     let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
-        let stacks = sampled_stack.stacks().collect::<Vec<_>>();    
+        let stacks = sampled_stack.stacks().collect::<Vec<_>>();
         let addresses_with_offset = stacks
             .iter()
             .map(|stack| stack.address + stack.offset)
@@ -230,12 +230,7 @@ impl Batch {
                 .column(2)
                 .as_primitive_opt::<UInt64Type>()
                 .expect("duration should be uint64");
-            multizip((
-                count.iter(),
-                stacks.iter(),
-                duration.iter(),
-            ))
-            .map(|(count, stacks, duration)| Stacks {
+            multizip((count.iter(), stacks.iter(), duration.iter())).map(|(count, stacks, duration)| Stacks {
                 count: count.unwrap_or(0),
                 stacks,
                 duration: duration.unwrap_or(0) as i64,
@@ -252,10 +247,15 @@ struct Stacks {
 
 impl Stacks {
     fn stacks(&self) -> impl Iterator<Item = Stack> + '_ {
-        let stack = self.stacks.as_ref().unwrap().as_struct_opt().expect("should be a struct with 3 arrays");
+        let stack = self
+            .stacks
+            .as_ref()
+            .unwrap()
+            .as_struct_opt()
+            .expect("should be a struct with 3 arrays");
         let names = stack.column(0).as_string::<i32>();
         let addresses = stack.column(1).as_primitive::<UInt64Type>();
-        let offsets = stack.column(2).as_primitive::<UInt64Type>();    
+        let offsets = stack.column(2).as_primitive::<UInt64Type>();
         multizip((names, addresses, offsets)).map(|(name, address, offset)| Stack {
             name: name.unwrap(),
             address: address.unwrap(),
@@ -268,7 +268,7 @@ impl Stacks {
 struct Stack<'a> {
     name: &'a str,
     address: u64,
-    offset: u64, 
+    offset: u64,
 }
 
 struct PprofStringDictionary {

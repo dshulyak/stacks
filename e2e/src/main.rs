@@ -183,7 +183,14 @@ struct OffcpuData {
 
 impl OffcpuData {
     fn stacks(&self) -> impl Iterator<Item = &str> + '_ {
-        self.kstack.as_ref().unwrap().as_struct().column(0).as_string::<i32>().iter().flatten()
+        self.kstack
+            .as_ref()
+            .unwrap()
+            .as_struct()
+            .column(0)
+            .as_string::<i32>()
+            .iter()
+            .flatten()
     }
 }
 

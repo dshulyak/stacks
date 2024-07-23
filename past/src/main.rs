@@ -221,11 +221,7 @@ fn main() -> Result<()> {
     decode_stack_options_into_bpf_cfg(&opt.perf_cpu_stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
     decode_stack_options_into_bpf_cfg(&opt.rss_stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
 
-    open_skel
-        .maps_mut()
-        .events()
-        .set_max_entries(opt.bpf_events)
-        .unwrap();
+    open_skel.maps_mut().events().set_max_entries(opt.bpf_events).unwrap();
     open_skel.maps_mut().stackmap().set_max_entries(opt.bpf_stacks).unwrap();
 
     let mut skel = open_skel.load().unwrap();
