@@ -14,7 +14,7 @@ use plain::Plain;
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    parquet::{Event, Group},
+    parquet::{Event, Group, ResolvedStack},
     past::past_types,
 };
 
@@ -271,8 +271,7 @@ pub(crate) trait Frames {
 
 #[instrument(skip_all)]
 pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
-    let mut kernel_addresses: HashMap<(i32, u64), Bytes> = HashMap::new();
-    let mut user_addresses: HashMap<(i32, u64), (Bytes, u64, u64)> = HashMap::new();
+    let mut resolved_addresses: HashMap<(i32, u64), ResolvedStack> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
     let mut unique = HashSet::new();
     let traces: HashMap<i32, Result<Vec<u64>>> = kstacks
@@ -298,7 +297,9 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         Ok(syms) => {
             for (symbol, addr) in syms.into_iter().zip(req.into_iter()) {
                 if let Some(sym) = symbol.as_sym() {
-                    kernel_addresses.insert((-1, addr), Bytes::copy_from_slice(sym.name.as_bytes()));
+                    let stack =
+                        ResolvedStack::new(Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64);
+                    resolved_addresses.insert((-1, addr), stack);
                 }
             }
         }
@@ -342,10 +343,9 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         };
         for (symbol, addr) in symbols.into_iter().zip(req.into_iter()) {
             if let Some(sym) = symbol.as_sym() {
-                user_addresses.insert(
-                    (tgid, addr),
-                    (Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64),
-                );
+                let stack =
+                    ResolvedStack::new(Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64);
+                    resolved_addresses.insert((tgid, addr), stack);
             }
         }
     }
@@ -356,8 +356,8 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
     let zipped = original_kstacks.into_iter().zip(original_ustacks);
     for (kstack_id, (tgid, ustack_id)) in zipped {
         match (
-            to_user_symbols(&ustack_traces, &user_addresses, tgid, ustack_id),
-            to_symbols(&traces, &kernel_addresses, -1, kstack_id),
+            to_symbols(&ustack_traces, &resolved_addresses, tgid, ustack_id),
+            to_symbols(&traces, &resolved_addresses, -1, kstack_id),
         ) {
             (Some(ustacks), Some(kstacks)) => {
                 stack_group.resolve(ustacks, kstacks);
@@ -375,37 +375,19 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
     }
 }
 
-fn to_user_symbols<'a>(
-    traces: &'a HashMap<i32, Result<Vec<u64>>>,
-    addresses: &'a HashMap<(i32, u64), (Bytes, u64, u64)>,
-    tgid: i32,
-    stack_id: i32,
-) -> Option<impl Iterator<Item = (Bytes, u64, u64)> + 'a> {
-    stack_id.checked_sub(1).and_then(move |stack_id| {
-        traces.get(&(stack_id + 1)).and_then(move |trace| {
-            trace.as_ref().ok().map(move |trace| {
-                trace
-                    .iter()
-                    .filter(|frame| **frame > 0)
-                    .flat_map(move |&frame| addresses.get(&(tgid, frame)).cloned())
-            })
-        })
-    })
-}
-
 fn to_symbols<'a>(
     traces: &'a HashMap<i32, Result<Vec<u64>>>,
-    addresses: &'a HashMap<(i32, u64), Bytes>,
+    addresses: &'a HashMap<(i32, u64), ResolvedStack>,
     tgid: i32,
     stack_id: i32,
-) -> Option<impl Iterator<Item = Bytes> + 'a> {
+) -> Option<impl Iterator<Item = &'a ResolvedStack> + 'a> {
     stack_id.checked_sub(1).and_then(move |stack_id| {
         traces.get(&(stack_id + 1)).and_then(move |trace| {
             trace.as_ref().ok().map(move |trace| {
                 trace
                     .iter()
                     .filter(|frame| **frame > 0)
-                    .flat_map(move |&frame| addresses.get(&(tgid, frame)).cloned())
+                    .flat_map(move |&frame| addresses.get(&(tgid, frame)))
             })
         })
     })

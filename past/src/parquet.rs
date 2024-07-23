@@ -65,10 +65,16 @@ fn events_schema() -> types::Type {
         required int64 amount (INTEGER(64, false));
         required binary command (UTF8);
         required binary trace_name (UTF8);
-        repeated binary ustack (UTF8);
-        repeated int64 ustack_address (INTEGER(64, false));
-        repeated int64 ustack_offset (INTEGER(64, false));
-        repeated binary kstack (UTF8);
+        repeated group ustack {
+            required binary name (UTF8);
+            required int64 address (INTEGER(64, false));
+            required int64 offset (INTEGER(64, false));
+        }
+        repeated group kstack {
+            required binary name (UTF8);
+            required int64 address (INTEGER(64, false));
+            required int64 offset (INTEGER(64, false));
+        }
     }
     ",
     )
@@ -153,7 +159,7 @@ pub(crate) struct Group {
     trace_name: Vec<ByteArray>,
 
     ustack: RepeatedStackWithAddress,
-    kstack: RepeatedStack,
+    kstack: RepeatedStackWithAddress,
 
     unresolved_ustack: Vec<i32>,
     unresolved_kstack: Vec<i32>,
@@ -178,14 +184,16 @@ impl Group {
             command: Vec::with_capacity(capacity),
             trace_name: Vec::with_capacity(capacity),
             ustack: RepeatedStackWithAddress {
-                stacks: Vec::with_capacity(capacity),
+                name: Vec::with_capacity(capacity),
                 address: Vec::with_capacity(capacity),
                 offset: Vec::with_capacity(capacity),
                 repetition_levels: Vec::with_capacity(capacity),
                 definition_levels: Vec::with_capacity(capacity),
             },
-            kstack: RepeatedStack {
-                stacks: Vec::with_capacity(capacity),
+            kstack: RepeatedStackWithAddress {
+                name: Vec::with_capacity(capacity),
+                address: Vec::with_capacity(capacity),
+                offset: Vec::with_capacity(capacity),
                 repetition_levels: Vec::with_capacity(capacity),
                 definition_levels: Vec::with_capacity(capacity),
             },
@@ -372,14 +380,19 @@ impl Group {
         self.amount.clear();
         self.command.clear();
         self.trace_name.clear();
-        self.ustack.stacks.clear();
+
+        self.ustack.name.clear();
         self.ustack.address.clear();
         self.ustack.offset.clear();
         self.ustack.repetition_levels.clear();
         self.ustack.definition_levels.clear();
-        self.kstack.stacks.clear();
+        
+        self.kstack.name.clear();
+        self.kstack.address.clear();
+        self.kstack.offset.clear();
         self.kstack.repetition_levels.clear();
         self.kstack.definition_levels.clear();
+
         self.unresolved_ustack.clear();
         self.unresolved_kstack.clear();
     }
@@ -402,19 +415,19 @@ impl Group {
         self.unresolved_kstack.iter().copied()
     }
 
-    pub(crate) fn resolve(
+    pub(crate) fn resolve<'a>(
         &mut self,
-        ustacks: impl Iterator<Item = (Bytes, u64, u64)>,
-        kstacks: impl Iterator<Item = Bytes>,
+        ustacks: impl Iterator<Item = &'a ResolvedStack>,
+        kstacks: impl Iterator<Item = &'a ResolvedStack>,
     ) {
         let mut rep_level = 0;
         for stack in ustacks {
             self.ustack.repetition_levels.push(rep_level);
             rep_level = 1;
             self.ustack.definition_levels.push(1);
-            self.ustack.stacks.push(stack.0.into());
-            self.ustack.address.push(stack.1 as i64);
-            self.ustack.offset.push(stack.2 as i64);
+            self.ustack.name.push(stack.name.clone().into());
+            self.ustack.address.push(stack.address as i64);
+            self.ustack.offset.push(stack.offset as i64);
         }
         if rep_level == 0 {
             self.ustack.repetition_levels.push(0);
@@ -426,12 +439,27 @@ impl Group {
             self.kstack.repetition_levels.push(rep_level);
             rep_level = 1;
             self.kstack.definition_levels.push(1);
-            self.kstack.stacks.push(stack.into());
+            self.kstack.name.push(stack.name.clone().into());
+            self.kstack.address.push(stack.address as i64);
+            self.kstack.offset.push(stack.offset as i64);
         }
         if rep_level == 0 {
             self.kstack.repetition_levels.push(0);
             self.kstack.definition_levels.push(0);
         }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct ResolvedStack {
+    name: Bytes,
+    address: u64,
+    offset: u64,
+}
+
+impl ResolvedStack {
+    pub(crate) fn new(name: Bytes, address: u64, offset: u64) -> Self {
+        Self { name, address, offset }
     }
 }
 
@@ -541,16 +569,16 @@ impl<W: Write + Send> GroupWriter<W> {
             .context("trace_name")?;
         trace_name.close()?;
 
-        let mut ustack = rows.next_column()?.expect("ustack column");
-        ustack
+        let mut ustack_name = rows.next_column()?.expect("ustack column");
+        ustack_name
             .typed::<ByteArrayType>()
             .write_batch(
-                &group.ustack.stacks,
+                &group.ustack.name,
                 Some(&group.ustack.definition_levels),
                 Some(&group.ustack.repetition_levels),
             )
             .context("ustack")?;
-        ustack.close().context("close ustack")?;
+        ustack_name.close().context("close ustack")?;
 
         let mut ustack_address = rows.next_column()?.expect("ustack_address column");
         ustack_address
@@ -574,16 +602,38 @@ impl<W: Write + Send> GroupWriter<W> {
             .context("ustack_offset")?;
         ustack_offset.close().context("close ustack_offset")?;
 
-        let mut kstack = rows.next_column()?.expect("kstack column");
-        kstack
+        let mut kstack_name = rows.next_column()?.expect("kstack column");
+        kstack_name
             .typed::<ByteArrayType>()
             .write_batch(
-                &group.kstack.stacks,
+                &group.kstack.name,
                 Some(&group.kstack.definition_levels),
                 Some(&group.kstack.repetition_levels),
             )
             .context("kstack")?;
-        kstack.close().context("close kstack")?;
+        kstack_name.close().context("close kstack")?;
+
+        let mut kstack_address = rows.next_column()?.expect("kstack_address column");
+        kstack_address
+            .typed::<Int64Type>()
+            .write_batch(
+                &group.kstack.address,
+                Some(&group.kstack.definition_levels),
+                Some(&group.kstack.repetition_levels),
+            )
+            .context("kstack_address")?;
+        kstack_address.close().context("close kstack_address")?;
+
+        let mut kstack_offset = rows.next_column()?.expect("kstack_offset column");
+        kstack_offset
+            .typed::<Int64Type>()
+            .write_batch(
+                &group.kstack.offset,
+                Some(&group.kstack.definition_levels),
+                Some(&group.kstack.repetition_levels),
+            )
+            .context("kstack_offset")?;
+        kstack_offset.close().context("close kstack_offset")?;
 
         rows.close().context("close rows")?;
         Ok(())
@@ -596,15 +646,8 @@ impl<W: Write + Send> GroupWriter<W> {
 }
 
 #[derive(Debug)]
-struct RepeatedStack {
-    stacks: Vec<ByteArray>,
-    repetition_levels: Vec<i16>,
-    definition_levels: Vec<i16>,
-}
-
-#[derive(Debug)]
 struct RepeatedStackWithAddress {
-    stacks: Vec<ByteArray>,
+    name: Vec<ByteArray>,
     address: Vec<i64>,
     offset: Vec<i64>,
     repetition_levels: Vec<i16>,
