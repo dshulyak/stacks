@@ -18,6 +18,8 @@ use proptest::{prelude::*, test_runner::Config};
 use proptest_state_machine::{prop_state_machine, ReferenceStateMachine, StateMachineTest};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use tracing::level_filters::LevelFilter;
+use tracing_subscriber::EnvFilter;
 
 use crate::{
     collector::{null_terminated, to_bytes, Frames, Received, Symbolizer},
@@ -334,6 +336,14 @@ impl StateMachineTest for TestState {
     type Reference = RefModel;
 
     fn init_test(ref_state: &RefState) -> Self::SystemUnderTest {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(
+                EnvFilter::builder()
+                    .with_default_directive(LevelFilter::INFO.into())
+                    .from_env_lossy(),
+            )
+            .try_init();
+
         let mut state = State::new(ref_state.row_group_size, ref_state.frames.clone());
         for thread in ref_state.threads.iter() {
             let fake_exec_event = past_types::process_exec_event {
@@ -419,10 +429,10 @@ async fn verify_switches(ctx: &SessionContext, ref_state: &RefState) {
 }
 
 async fn verify_perf(ctx: &SessionContext, ref_state: &RefState) {
-    // show(ctx, STACKS_QUERY).await;
-    // for stack in ref_state.persisted_stacks.iter() {
-    //     println!("{:?}", stack);
-    // }
+    show(ctx, STACKS_QUERY).await;
+    for stack in ref_state.persisted_stacks.iter() {
+        println!("{:?}", stack);
+    }
 
     let batch = read(ctx, STACKS_QUERY).await;
     let tgid_to_comm = ref_state
@@ -504,25 +514,23 @@ impl Batch {
                 },
                 ustack: match ustack {
                     None => vec![],
-                    Some(ustack) => {
-                        let ustack = ustack.as_string::<i32>();
-                        ustack
-                            .iter()
-                            .filter(|s| s.is_some())
-                            .map(|s| s.unwrap().to_string())
-                            .collect()
-                    }
+                    Some(ustack) => ustack
+                        .as_struct()
+                        .column(0)
+                        .as_string::<i32>()
+                        .iter()
+                        .filter_map(|s| s.map(|s| s.to_string()))
+                        .collect(),
                 },
                 kstack: match kstack {
                     None => vec![],
-                    Some(kstack) => {
-                        let kstack = kstack.as_string::<i32>();
-                        kstack
-                            .iter()
-                            .filter(|s| s.is_some())
-                            .map(|s| s.unwrap().to_string())
-                            .collect()
-                    }
+                    Some(kstack) => kstack
+                        .as_struct()
+                        .column(0)
+                        .as_string::<i32>()
+                        .iter()
+                        .filter_map(|s| s.map(|s| s.to_string()))
+                        .collect(),
                 },
             })
         })
