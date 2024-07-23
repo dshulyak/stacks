@@ -567,6 +567,8 @@ impl Batch {
                     ustack: match ustack {
                         None => vec![],
                         Some(ustack) => ustack
+                            .as_struct()
+                            .column(0)
                             .as_string::<i32>()
                             .iter()
                             .filter_map(|s| s.map(|s| s.to_string()))
@@ -575,6 +577,8 @@ impl Batch {
                     kstack: match kstack {
                         None => vec![],
                         Some(kstack) => kstack
+                            .as_struct()
+                            .column(0)
                             .as_string::<i32>()
                             .iter()
                             .filter_map(|s| s.map(|s| s.to_string()))

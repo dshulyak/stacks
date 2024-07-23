@@ -21,8 +21,8 @@ with offcpu_stacks as (
 )
 select
     array_union(kstack, ustack) as stack,
-    count(*),
-    sum(offcpu)
+    count(*) as count,
+    sum(offcpu) as offcpu_ns
 from
     offcpu_stacks
 where

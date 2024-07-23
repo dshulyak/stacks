@@ -39,19 +39,17 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
     let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
-        let addresses = sampled_stack.addresses();
-        let offsets = sampled_stack.offsets();
-        for ((stack, addr), offset) in sampled_stack.stacks().zip(addresses).zip(offsets) {
+        for stack in sampled_stack.stacks() {
             // if we have line information we will see the difference by looking at source.
             // without binary/debuginfo there is no clear way to see that samples are actually
             // collected from different addresses, for this purpose i am adding offset to the name explicitly
-            let stack = format!("{}-{:x}", stack, offset);
-            match functions.get_or_insert(stack.as_str()) {
+            let name = format!("{}-{:x}", stack.name, stack.offset);
+            match functions.get_or_insert(name.as_str()) {
                 DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
                 DictionaryEntry::New(function_id) => {
                     let function = proto::Function {
                         id: function_id as u64,
-                        name: *strings.get_or_insert(stack.as_str()),
+                        name: *strings.get_or_insert(name.as_str()),
                         ..Default::default()
                     };
                     let line = proto::Line {
@@ -60,7 +58,7 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
                     };
                     let location = proto::Location {
                         id: function_id as u64,
-                        address: addr + offset,
+                        address: stack.address + stack.offset,
                         line: vec![line],
                         ..Default::default()
                     };
@@ -131,21 +129,19 @@ async fn generate_pprof_with_symbolization(
     let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
-        let addresses = sampled_stack.addresses().collect::<Vec<u64>>();
-        let offsets = sampled_stack.offsets().collect::<Vec<u64>>();
-        let addresses_with_offset = addresses
+        let stacks = sampled_stack.stacks().collect::<Vec<_>>();    
+        let addresses_with_offset = stacks
             .iter()
-            .zip(offsets.iter())
-            .map(|(addr, offset)| addr + offset)
+            .map(|stack| stack.address + stack.offset)
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
-        for (stack, symbolized, addr, offset) in multizip((sampled_stack.stacks(), symbolized, addresses, offsets)) {
-            let function_id = match functions.get_or_insert(stack.as_ref()) {
+        for (stack, symbolized) in multizip((stacks.iter(), symbolized)) {
+            let function_id = match functions.get_or_insert(stack.name.as_ref()) {
                 DictionaryEntry::Existing(function_id) => function_id,
                 DictionaryEntry::New(function_id) => {
                     let mut function = proto::Function {
                         id: function_id as u64,
-                        name: *strings.get_or_insert(stack.as_ref()),
+                        name: *strings.get_or_insert(stack.name.as_ref()),
                         ..Default::default()
                     };
                     if let Symbolized::Sym(sym) = &symbolized {
@@ -159,7 +155,7 @@ async fn generate_pprof_with_symbolization(
                     function_id
                 }
             };
-            match location_addr_to_index.entry(addr + offset) {
+            match location_addr_to_index.entry(stack.address + stack.offset) {
                 hash_map::Entry::Occupied(entry) => {
                     locations.push(*entry.get() as u64);
                 }
@@ -180,7 +176,7 @@ async fn generate_pprof_with_symbolization(
                     }
                     let location = proto::Location {
                         id: last_location as u64,
-                        address: addr + offset,
+                        address: stack.address + stack.offset,
                         line: vec![line],
                         ..Default::default()
                     };
@@ -234,21 +230,15 @@ impl Batch {
                 .column(2)
                 .as_primitive_opt::<UInt64Type>()
                 .expect("duration should be uint64");
-            let address = batch.column(3).as_any().downcast_ref::<ListArray>().unwrap();
-            let offsets = batch.column(4).as_any().downcast_ref::<ListArray>().unwrap();
             multizip((
                 count.iter(),
                 stacks.iter(),
-                address.iter(),
-                offsets.iter(),
                 duration.iter(),
             ))
-            .map(|(count, stacks, address, offsets, duration)| Stacks {
+            .map(|(count, stacks, duration)| Stacks {
                 count: count.unwrap_or(0),
                 stacks,
                 duration: duration.unwrap_or(0) as i64,
-                addresses: address,
-                offsets,
             })
         })
     }
@@ -258,38 +248,27 @@ struct Stacks {
     count: i64,
     duration: i64,
     stacks: Option<Arc<dyn Array>>,
-    addresses: Option<Arc<dyn Array>>,
-    offsets: Option<Arc<dyn Array>>,
 }
 
 impl Stacks {
-    fn addresses(&self) -> impl Iterator<Item = u64> + '_ {
-        self.addresses
-            .as_ref()
-            .unwrap()
-            .as_primitive::<UInt64Type>()
-            .iter()
-            .map(|x| x.unwrap())
+    fn stacks(&self) -> impl Iterator<Item = Stack> + '_ {
+        let stack = self.stacks.as_ref().unwrap().as_struct_opt().expect("should be a struct with 3 arrays");
+        let names = stack.column(0).as_string::<i32>();
+        let addresses = stack.column(1).as_primitive::<UInt64Type>();
+        let offsets = stack.column(2).as_primitive::<UInt64Type>();    
+        multizip((names, addresses, offsets)).map(|(name, address, offset)| Stack {
+            name: name.unwrap(),
+            address: address.unwrap(),
+            offset: offset.unwrap(),
+        })
     }
+}
 
-    fn offsets(&self) -> impl Iterator<Item = u64> + '_ {
-        self.offsets
-            .as_ref()
-            .unwrap()
-            .as_primitive::<UInt64Type>()
-            .iter()
-            .map(|x| x.unwrap())
-    }
-
-    fn stacks(&self) -> impl Iterator<Item = &str> + '_ {
-        self.stacks
-            .as_ref()
-            .unwrap()
-            .as_string_opt::<i32>()
-            .expect("stacks should be string array")
-            .iter()
-            .flatten()
-    }
+#[derive(Debug)]
+struct Stack<'a> {
+    name: &'a str,
+    address: u64,
+    offset: u64, 
 }
 
 struct PprofStringDictionary {
