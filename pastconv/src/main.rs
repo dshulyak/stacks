@@ -34,24 +34,33 @@ enum Command {
 
 #[derive(Parser)]
 enum PprofCommand {
-    #[clap(aliases = &["c"])]
+    #[clap(aliases = &["c"], about = "samples of cpu profile")]
     Cpu {
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
-    #[clap(aliases = &["o"])]
+    #[clap(aliases = &["o"], about = "waiting to be run. it can be IO, sychronization, time")]
     Offcpu {
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
-    #[clap(aliases = &["r"])]
+    #[clap(aliases = &["r"], about = "rss profile. stacks are collected when page is requested in kernel")]
     Rss {
         #[clap(index = 1, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: String,
     },
+    #[clap(
+        about = r#"generate pprof from any custom query. sql query is expected to return rows with 3 columns.
+first column is a collection with triples (name - utf8 string, address - u64, offset - u64).
+second column is a number of collected samples - i64.
+third column can be any data that is useful for pprof, for example in offcpu profile it can be a total waiting time - u64.    
+"#
+    )]
     Raw {
         #[clap(index = 1, help = "file with sql query")]
         query_file: PathBuf,
+        #[clap(short, long, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
+        command: Option<String>,
     },
 }
 
@@ -77,9 +86,9 @@ async fn main() -> Result<()> {
             PprofCommand::Rss { command } => {
                 pprof::pprof(&opt.register, &destination, RSS_PPROF_SQL, Some(&command), binary).await
             }
-            PprofCommand::Raw { query_file } => {
+            PprofCommand::Raw { query_file, command } => {
                 let query = std::fs::read_to_string(query_file)?;
-                pprof::pprof(&opt.register, &destination, &query, None, binary).await
+                pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary).await
             }
         },
     }

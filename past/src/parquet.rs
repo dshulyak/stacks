@@ -19,7 +19,7 @@ pub(crate) enum EventKind {
     Perf,
     // Collected when process is switched out by the scheduler
     Switch,
-    RSSStat,
+    Rss,
     TraceExit,
     TraceClose,
 }
@@ -29,7 +29,7 @@ impl From<EventKind> for &'static [u8] {
         match kind {
             EventKind::Perf => b"perf",
             EventKind::Switch => b"switch",
-            EventKind::RSSStat => b"rss",
+            EventKind::Rss => b"rss",
             EventKind::TraceExit => b"trace_exit",
             EventKind::TraceClose => b"trace_close",
         }
@@ -65,6 +65,7 @@ fn events_schema() -> types::Type {
         required int64 amount (INTEGER(64, false));
         required binary command (UTF8);
         required binary trace_name (UTF8);
+        required binary buildid;
         repeated group ustack {
             required binary name (UTF8);
             required int64 address (INTEGER(64, false));
@@ -90,15 +91,17 @@ pub(crate) enum Event {
         tgid: i32,
         pid: i32,
         command: Bytes,
+        buildid: Bytes,
         ustack: i32,
         kstack: i32,
     },
-    CPUStack {
+    Profile {
         ts: i64,
         cpu: i32,
         tgid: i32,
         pid: i32,
         command: Bytes,
+        buildid: Bytes,
         ustack: i32,
         kstack: i32,
     },
@@ -106,6 +109,7 @@ pub(crate) enum Event {
         ts: i64,
         tgid: i32,
         command: Bytes,
+        buildid: Bytes,
         amount: u64,
         ustack: i32,
         kstack: i32,
@@ -122,6 +126,7 @@ pub(crate) enum Event {
         amount: i64,
         name: Bytes,
         command: Bytes,
+        buildid: Bytes,
         ustack: i32,
     },
     TraceClose {
@@ -136,6 +141,7 @@ pub(crate) enum Event {
         amount: i64,
         name: Bytes,
         command: Bytes,
+        buildid: Bytes,
     },
 }
 
@@ -157,6 +163,8 @@ pub(crate) struct Group {
     amount: Vec<i64>,
     command: Vec<ByteArray>,
     trace_name: Vec<ByteArray>,
+
+    buildid: Vec<ByteArray>,
 
     ustack: RepeatedStackWithAddress,
     kstack: RepeatedStackWithAddress,
@@ -183,6 +191,7 @@ impl Group {
             amount: Vec::with_capacity(capacity),
             command: Vec::with_capacity(capacity),
             trace_name: Vec::with_capacity(capacity),
+            buildid: Vec::with_capacity(capacity),
             ustack: RepeatedStackWithAddress {
                 name: Vec::with_capacity(capacity),
                 address: Vec::with_capacity(capacity),
@@ -233,6 +242,7 @@ impl Group {
                 self.amount.swap(i, i - 1);
                 self.command.swap(i, i - 1);
                 self.trace_name.swap(i, i - 1);
+                self.buildid.swap(i, i - 1);
                 self.unresolved_kstack.swap(i, i - 1);
                 self.unresolved_ustack.swap(i, i - 1);
                 i -= 1;
@@ -241,6 +251,7 @@ impl Group {
     }
 
     pub(crate) fn collect(&mut self, event: Event) {
+        // TODO avoid explicitly changing columns that are not touched
         match event {
             Event::Switch {
                 ts,
@@ -249,6 +260,7 @@ impl Group {
                 tgid,
                 pid,
                 command,
+                buildid,
                 ustack,
                 kstack,
             } => {
@@ -258,17 +270,19 @@ impl Group {
                 self.tgid.push(tgid);
                 self.pid.push(pid);
                 self.command.push(command.into());
+                self.buildid.push(buildid.into());
                 self.unresolved_kstack.push(kstack);
                 self.unresolved_ustack.push(ustack);
                 self.add_empty_trace();
                 self.add_timestamp(ts);
             }
-            Event::CPUStack {
+            Event::Profile {
                 ts,
                 cpu,
                 tgid,
                 pid,
                 command,
+                buildid,
                 ustack,
                 kstack,
             } => {
@@ -278,6 +292,7 @@ impl Group {
                 self.tgid.push(tgid);
                 self.pid.push(pid);
                 self.command.push(command.into());
+                self.buildid.push(buildid.into());
                 self.unresolved_ustack.push(ustack);
                 self.unresolved_kstack.push(kstack);
                 self.add_empty_trace();
@@ -287,12 +302,13 @@ impl Group {
                 ts,
                 tgid,
                 command,
+                buildid,
                 amount,
                 ustack,
                 kstack,
             } => {
                 self.duration.push(0);
-                self.kind.push(EventKind::RSSStat.into());
+                self.kind.push(EventKind::Rss.into());
                 self.cpu.push(0);
                 self.tgid.push(tgid);
                 self.pid.push(0);
@@ -301,6 +317,7 @@ impl Group {
                 self.id.push(0);
                 self.amount.push(amount as i64);
                 self.command.push(command.into());
+                self.buildid.push(buildid.into());
                 self.trace_name.push(Bytes::new().into());
                 self.unresolved_kstack.push(kstack);
                 self.unresolved_ustack.push(ustack);
@@ -318,6 +335,7 @@ impl Group {
                 amount,
                 name,
                 command,
+                buildid,
                 ustack,
             } => {
                 self.duration.push(duration);
@@ -330,8 +348,9 @@ impl Group {
                 self.id.push(id);
                 self.amount.push(amount);
                 self.command.push(command.into());
+                self.buildid.push(buildid.into());
                 self.trace_name.push(name.into());
-                self.unresolved_kstack.push(0);
+                self.unresolved_kstack.push(-1);
                 self.unresolved_ustack.push(ustack);
                 self.add_timestamp(ts);
             }
@@ -347,6 +366,7 @@ impl Group {
                 amount,
                 name,
                 command,
+                buildid,
             } => {
                 self.duration.push(duration);
                 self.kind.push(EventKind::TraceClose.into());
@@ -358,9 +378,10 @@ impl Group {
                 self.id.push(id);
                 self.amount.push(amount);
                 self.command.push(command.into());
+                self.buildid.push(buildid.into());
                 self.trace_name.push(name.into());
-                self.unresolved_kstack.push(0);
-                self.unresolved_ustack.push(0);
+                self.unresolved_kstack.push(-1);
+                self.unresolved_ustack.push(-1);
                 self.add_timestamp(ts);
             }
         }
@@ -380,6 +401,7 @@ impl Group {
         self.amount.clear();
         self.command.clear();
         self.trace_name.clear();
+        self.buildid.clear();
 
         self.ustack.name.clear();
         self.ustack.address.clear();
@@ -487,7 +509,7 @@ impl<W: Write + Send> GroupWriter<W> {
     }
 
     #[instrument(skip_all)]
-    pub(crate) fn write(&mut self, group: &Group) -> Result<()> {
+    pub(crate) fn write(&mut self, group: &mut Group) -> Result<()> {
         let mut rows = self.0.next_row_group()?;
         let mut timestamp = rows.next_column()?.expect("timestamp column");
         timestamp
@@ -567,6 +589,13 @@ impl<W: Write + Send> GroupWriter<W> {
             .write_batch(&group.trace_name, None, None)
             .context("trace_name")?;
         trace_name.close()?;
+
+        let mut builids = rows.next_column()?.expect("blobs column");
+        builids
+            .typed::<ByteArrayType>()
+            .write_batch(&group.buildid, None, None)
+            .context("blobs")?;
+        builids.close()?;
 
         let mut ustack_name = rows.next_column()?.expect("ustack column");
         ustack_name

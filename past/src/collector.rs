@@ -3,12 +3,16 @@ use std::{
     fs,
     iter::empty,
     num::NonZeroU32,
+    path::PathBuf,
     rc::Rc,
     time::SystemTime,
 };
 
-use anyhow::Result;
-use blazesym::symbolize::{self, Input, Kernel, Process, Source, Symbolized};
+use anyhow::{Context, Result};
+use blazesym::{
+    helper::read_elf_build_id,
+    symbolize::{self, Input, Kernel, Process, Source, Symbolized},
+};
 use bytes::Bytes;
 use plain::Plain;
 use tracing::{debug, instrument, warn};
@@ -16,6 +20,7 @@ use tracing::{debug, instrument, warn};
 use crate::{
     parquet::{Event, Group, ResolvedStack},
     past::past_types,
+    program::ProcessInfo,
 };
 
 unsafe impl Plain for past_types::switch_event {}
@@ -94,13 +99,13 @@ impl Collector {
         self.tgid_span_id_pid_to_enter.clear();
     }
 
-    pub(crate) fn collect(&mut self, tgid_to_command: &HashMap<u32, Bytes>, event: Received) -> Result<()> {
+    pub(crate) fn collect(&mut self, tgid_to_process_info: &HashMap<u32, ProcessInfo>, event: Received) -> Result<()> {
         // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
         match event {
             Received::Switch(event) => {
-                let command = match tgid_to_command.get(&event.tgid) {
+                let process_info = match tgid_to_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
                         anyhow::bail!("missing command for pid {}", event.tgid);
@@ -112,41 +117,44 @@ impl Collector {
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
-                    command: command.clone(),
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
                     ustack: event.ustack,
                     kstack: event.kstack,
                 });
             }
             Received::PerfStack(event) => {
                 if event.ustack > 0 || event.kstack > 0 {
-                    let command = match tgid_to_command.get(&event.tgid) {
+                    let process_info = match tgid_to_process_info.get(&event.tgid) {
                         Some(command) => command,
                         None => {
-                            anyhow::bail!("missing command for tgid {}", event.tgid);
+                            anyhow::bail!("missing command for pid {}", event.tgid);
                         }
                     };
-                    self.group.collect(Event::CPUStack {
+                    self.group.collect(Event::Profile {
                         ts: event.timestamp as i64,
                         cpu: event.cpu_id as i32,
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
-                        command: command.clone(),
+                        command: process_info.command.clone(),
+                        buildid: process_info.buildid.clone(),
                         ustack: event.ustack,
                         kstack: event.kstack,
                     });
                 };
             }
             Received::RssStat(event) => {
-                let command = match tgid_to_command.get(&event.tgid) {
+                let process_info = match tgid_to_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
-                        anyhow::bail!("missing command for tgid {}", event.tgid);
+                        anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
                 self.group.collect(Event::RssStat {
                     ts: event.ts as i64,
                     tgid: event.tgid as i32,
-                    command: command.clone(),
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
                     amount: event.rss * self.page_size,
                     ustack: event.ustack,
                     kstack: event.kstack,
@@ -174,7 +182,7 @@ impl Collector {
                 };
             }
             Received::TraceExit(event) => {
-                let command = match tgid_to_command.get(&event.tgid) {
+                let process_info = match tgid_to_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
                         anyhow::bail!("missing command for pid {}", event.tgid);
@@ -195,7 +203,8 @@ impl Collector {
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
-                    command: command.clone(),
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
                     span_id: event.span_id as i64,
                     parent_id: span.parent_id as i64,
                     id: span.id as i64,
@@ -211,7 +220,7 @@ impl Collector {
                     .range((event.tgid, event.span_id, 0)..(event.tgid, event.span_id, u32::MAX))
                     .map(|(k, _)| k.2)
                     .collect::<Vec<_>>();
-                let command = tgid_to_command.get(&pids[0]);
+                let process_info = tgid_to_process_info.get(&pids[0]);
                 for (i, pid) in pids.into_iter().enumerate() {
                     let span = match self.tgid_span_id_pid_to_enter.remove(&(event.tgid, event.span_id, pid)) {
                         Some(span) => span,
@@ -222,14 +231,15 @@ impl Collector {
                     if i > 0 {
                         continue;
                     }
-                    if let Some(command) = command {
+                    if let Some(process_info) = process_info {
                         self.group.collect(Event::TraceClose {
                             ts: event.ts as i64,
                             duration: (event.ts - span.first_enter_ts) as i64,
                             cpu: event.cpu_id as i32,
                             tgid: event.tgid as i32,
                             pid: pid as i32,
-                            command: command.clone(),
+                            command: process_info.command.clone(),
+                            buildid: process_info.buildid.clone(),
                             span_id: event.span_id as i64,
                             parent_id: span.parent_id as i64,
                             id: span.id as i64,
@@ -398,7 +408,7 @@ pub(crate) trait Symbolizer {
 
     fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
 
-    fn init_symbolizer(&mut self, tgid: u32) -> Result<()>;
+    fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes>;
 
     fn drop_symbolizer(&mut self, tgid: u32) -> Result<()>;
 
@@ -408,7 +418,7 @@ pub(crate) trait Symbolizer {
 #[derive(Debug)]
 struct ExecutableSymbolizer {
     symbolizer: symbolize::Symbolizer,
-    exe: String,
+    exe: PathBuf,
     mtime: u64,
 }
 
@@ -421,7 +431,7 @@ pub(crate) struct BlazesymSymbolizer {
     // - all processes that use referenced executable exited
     // - last batch of frames are symbolized after last process that used them exited
     // (if i drop symbolizer immediately data will be lost)
-    executable_symbolizers: HashMap<(String, u64), Rc<ExecutableSymbolizer>>,
+    executable_symbolizers: HashMap<(PathBuf, u64), Rc<ExecutableSymbolizer>>,
     process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
 }
 
@@ -445,11 +455,16 @@ impl Symbolizer for BlazesymSymbolizer {
         Ok(rst)
     }
 
-    fn init_symbolizer(&mut self, tgid: u32) -> Result<()> {
+    fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes> {
         let (exe, mtime) = exe_name_and_change_time(tgid)?;
+        let buildid = read_elf_build_id(&exe)
+            .context("read buildid")?
+            .map(|buildid| Bytes::copy_from_slice(buildid.as_ref()))
+            .unwrap_or_default();
+
         if let Some(symboliser) = self.executable_symbolizers.get(&(exe.clone(), mtime)) {
             self.process_symbolizers.insert(tgid, symboliser.clone());
-            return Ok(());
+            return Ok(buildid);
         } else {
             let symbolizer = symbolize::Symbolizer::builder()
                 .enable_code_info(false)
@@ -461,7 +476,7 @@ impl Symbolizer for BlazesymSymbolizer {
                 exe: exe.clone(),
                 mtime,
             });
-            debug!("symbolizer for tgid={} with executable {} initialized", tgid, exe);
+            debug!("symbolizer for tgid={} with executable {:?} initialized", tgid, exe);
             self.executable_symbolizers.insert((exe, mtime), symboliser.clone());
             self.process_symbolizers.insert(tgid, symboliser);
         }
@@ -478,7 +493,7 @@ impl Symbolizer for BlazesymSymbolizer {
         ) {
             debug!("caching unsuccesful for tgid={} err={}", tgid, err);
         }
-        Ok(())
+        Ok(buildid)
     }
 
     fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
@@ -490,7 +505,7 @@ impl Symbolizer for BlazesymSymbolizer {
             );
             // last one was removed from process_symbolizers and one left in executable_symbolizers
             if Rc::strong_count(&symbolizer) <= 2 {
-                debug!("symbolizer for exe={} dropped", symbolizer.exe);
+                debug!("symbolizer for exe={:?} dropped", symbolizer.exe);
                 self.executable_symbolizers
                     .remove(&(symbolizer.exe.clone(), symbolizer.mtime));
             }
@@ -521,10 +536,10 @@ impl Symbolizer for BlazesymSymbolizer {
     }
 }
 
-fn exe_name_and_change_time(tgid: u32) -> Result<(String, u64)> {
+fn exe_name_and_change_time(tgid: u32) -> Result<(PathBuf, u64)> {
     let path = format!("/proc/{}/exe", tgid);
     let exe = fs::read_link(path)?;
     let meta = exe.metadata()?;
     let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
-    Ok((exe.to_string_lossy().to_string(), mtime))
+    Ok((exe, mtime))
 }
