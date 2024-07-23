@@ -61,7 +61,7 @@ fn events_schema() -> types::Type {
         required int32 pid (INTEGER(32, false));
         required int64 span_id (INTEGER(64, false));
         required int64 parent_id (INTEGER(64, false));
-        required int64 work_id (INTEGER(64, false));
+        required int64 id (INTEGER(64, false));
         required int64 amount (INTEGER(64, false));
         required binary command (UTF8);
         required binary trace_name (UTF8);
@@ -110,7 +110,7 @@ pub(crate) enum Event {
         pid: i32,
         span_id: i64,
         parent_id: i64,
-        work_id: i64,
+        id: i64,
         amount: i64,
         name: Bytes,
         command: Bytes,
@@ -124,7 +124,7 @@ pub(crate) enum Event {
         pid: i32,
         span_id: i64,
         parent_id: i64,
-        work_id: i64,
+        id: i64,
         amount: i64,
         name: Bytes,
         command: Bytes,
@@ -145,7 +145,7 @@ pub(crate) struct Group {
     pid: Vec<i32>,
     span_id: Vec<i64>,
     parent_id: Vec<i64>,
-    work_id: Vec<i64>,
+    id: Vec<i64>,
     amount: Vec<i64>,
     command: Vec<ByteArray>,
     trace_name: Vec<ByteArray>,
@@ -171,7 +171,7 @@ impl Group {
             pid: Vec::with_capacity(capacity),
             span_id: Vec::with_capacity(capacity),
             parent_id: Vec::with_capacity(capacity),
-            work_id: Vec::with_capacity(capacity),
+            id: Vec::with_capacity(capacity),
             amount: Vec::with_capacity(capacity),
             command: Vec::with_capacity(capacity),
             trace_name: Vec::with_capacity(capacity),
@@ -217,7 +217,7 @@ impl Group {
                 self.pid.swap(i, i - 1);
                 self.span_id.swap(i, i - 1);
                 self.parent_id.swap(i, i - 1);
-                self.work_id.swap(i, i - 1);
+                self.id.swap(i, i - 1);
                 self.amount.swap(i, i - 1);
                 self.command.swap(i, i - 1);
                 self.trace_name.swap(i, i - 1);
@@ -286,7 +286,7 @@ impl Group {
                 self.pid.push(0);
                 self.span_id.push(0);
                 self.parent_id.push(0);
-                self.work_id.push(0);
+                self.id.push(0);
                 self.amount.push(amount as i64);
                 self.command.push(command.into());
                 self.trace_name.push(Bytes::new().into());
@@ -302,7 +302,7 @@ impl Group {
                 pid,
                 span_id,
                 parent_id,
-                work_id,
+                id,
                 amount,
                 name,
                 command,
@@ -315,7 +315,7 @@ impl Group {
                 self.pid.push(pid);
                 self.span_id.push(span_id);
                 self.parent_id.push(parent_id);
-                self.work_id.push(work_id);
+                self.id.push(id);
                 self.amount.push(amount);
                 self.command.push(command.into());
                 self.trace_name.push(name.into());
@@ -331,7 +331,7 @@ impl Group {
                 pid,
                 span_id,
                 parent_id,
-                work_id,
+                id,
                 amount,
                 name,
                 command,
@@ -343,7 +343,7 @@ impl Group {
                 self.pid.push(pid);
                 self.span_id.push(span_id);
                 self.parent_id.push(parent_id);
-                self.work_id.push(work_id);
+                self.id.push(id);
                 self.amount.push(amount);
                 self.command.push(command.into());
                 self.trace_name.push(name.into());
@@ -364,7 +364,7 @@ impl Group {
         self.pid.clear();
         self.span_id.clear();
         self.parent_id.clear();
-        self.work_id.clear();
+        self.id.clear();
         self.amount.clear();
         self.command.clear();
         self.trace_name.clear();
@@ -381,7 +381,7 @@ impl Group {
     fn add_empty_trace(&mut self) {
         self.span_id.push(0);
         self.parent_id.push(0);
-        self.work_id.push(0);
+        self.id.push(0);
         self.amount.push(0);
         self.trace_name.push(Bytes::new().into());
     }
@@ -501,12 +501,11 @@ impl<W: Write + Send> GroupWriter<W> {
             .context("parent_id")?;
         parent_id.close()?;
 
-        let mut work_id = rows.next_column()?.expect("work_id column");
-        work_id
-            .typed::<Int64Type>()
-            .write_batch(&group.work_id, None, None)
-            .context("work_id")?;
-        work_id.close()?;
+        let mut id = rows.next_column()?.expect("id column");
+        id.typed::<Int64Type>()
+            .write_batch(&group.id, None, None)
+            .context("id")?;
+        id.close()?;
 
         let mut amount = rows.next_column()?.expect("amount column");
         amount

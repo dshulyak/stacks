@@ -68,7 +68,7 @@ impl<'a> From<&'a [u8]> for Received<'a> {
 #[derive(Debug)]
 struct SpanEnter {
     parent_id: u64,
-    work_id: u64,
+    id: u64,
     amount: u64,
     name: Bytes,
     first_enter_ts: u64,
@@ -160,7 +160,7 @@ impl Collector {
                     btree_map::Entry::Vacant(vacant) => {
                         vacant.insert(SpanEnter {
                             parent_id: event.parent_id,
-                            work_id: event.work_id,
+                            id: event.id,
                             amount: event.amount,
                             name: Bytes::copy_from_slice(null_terminated(&event.name)),
                             first_enter_ts: event.ts,
@@ -198,7 +198,7 @@ impl Collector {
                     command: command.clone(),
                     span_id: event.span_id as i64,
                     parent_id: span.parent_id as i64,
-                    work_id: span.work_id as i64,
+                    id: span.id as i64,
                     amount: span.amount as i64,
                     name: span.name.clone(),
                     ustack: event.ustack,
@@ -232,7 +232,7 @@ impl Collector {
                             command: command.clone(),
                             span_id: event.span_id as i64,
                             parent_id: span.parent_id as i64,
-                            work_id: span.work_id as i64,
+                            id: span.id as i64,
                             amount: span.amount as i64,
                             name: span.name.clone(),
                         });

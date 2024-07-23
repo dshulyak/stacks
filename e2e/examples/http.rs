@@ -55,7 +55,7 @@ async fn post_job(State(storage): State<JobStorage>, Json(input): Json<JobInput>
     Json(job_result)
 }
 
-#[instrument(skip_all, fields(work_id = %id))]
+#[instrument(skip_all, fields(id = %id))]
 async fn get_job(
     State(storage): State<JobStorage>,
     axum::extract::Path(id): axum::extract::Path<usize>,
