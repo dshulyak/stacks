@@ -345,7 +345,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
             if let Some(sym) = symbol.as_sym() {
                 let stack =
                     ResolvedStack::new(Bytes::copy_from_slice(sym.name.as_bytes()), sym.addr, sym.offset as u64);
-                    resolved_addresses.insert((tgid, addr), stack);
+                resolved_addresses.insert((tgid, addr), stack);
             }
         }
     }
