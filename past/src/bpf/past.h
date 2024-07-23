@@ -68,7 +68,7 @@ struct tracing_enter_event {
     __u32 pid;
     __u64 span_id;
     __u64 parent_id;
-    __u64 work_id;
+    __u64 id;
     __u64 amount;
     __u8 name[TASK_COMM_LEN];
 };

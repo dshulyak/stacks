@@ -380,7 +380,7 @@ int handle__sched_process_exec(u64 *ctx)
 }
 
 SEC("usdt")
-int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 work_id, u64 amount, void *name)
+int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 amount, void *name)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
@@ -401,7 +401,7 @@ int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 work_id, u
     event->pid = pid;
     event->span_id = span_id;
     event->parent_id = parent_span_id;
-    event->work_id = work_id;
+    event->id = id;
     event->amount = amount;
     bpf_probe_read_user_str(&event->name, sizeof(event->name), name);
     bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);

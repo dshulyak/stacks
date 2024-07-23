@@ -12,21 +12,21 @@ pub fn init() {
 struct SpanInfo {
     span_id: u64,
     parent_span_id: u64,
-    work_id: u64,
+    id: u64,
     amount: u64,
     name: [u8; 16],
 
     exit_stack: bool,
 }
 
-const WORK_ID: &str = "work_id";
+const ID: &str = "id";
 const THROUGHPUT_METRIC: &str = "amount";
 const EXIT_STACK: &str = "exit_stack";
 
 impl Visit for SpanInfo {
     fn record_u64(&mut self, field: &tracing_core::Field, value: u64) {
         match field.name() {
-            WORK_ID => self.work_id = value,
+            ID => self.id = value,
             THROUGHPUT_METRIC => self.amount = value,
             _ => {}
         }
@@ -38,15 +38,7 @@ impl Visit for SpanInfo {
         }
     }
 
-    fn record_debug(&mut self, field: &tracing_core::Field, _: &dyn std::fmt::Debug) {
-        match field.name() {
-            WORK_ID => debug_assert!(false, "field `work_id` is not u64"),
-            THROUGHPUT_METRIC => {
-                debug_assert!(false, "field `amount` is not u64")
-            }
-            _ => {}
-        }
-    }
+    fn record_debug(&mut self, _: &tracing_core::Field, _: &dyn std::fmt::Debug) {}
 }
 
 pub struct PastSubscriber {}
@@ -68,7 +60,7 @@ where
                 name: buf,
                 parent_span_id: attrs.parent().or(ctx.current_span().id()).map_or(0, |id| id.into_u64()),
                 span_id: id.into_u64(),
-                work_id: 0,
+                id: 0,
                 amount: 0,
                 exit_stack: false,
             };
@@ -86,7 +78,7 @@ where
                 enter,
                 span_info.span_id as *const u64,
                 span_info.parent_span_id as *const u64,
-                span_info.work_id as *const u64,
+                span_info.id as *const u64,
                 span_info.amount as *const u64,
                 span_info.name.as_ptr()
             );
