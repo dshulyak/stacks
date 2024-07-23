@@ -286,7 +286,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
                     }
                 }
                 Err(err) => {
-                    debug!("collecting kernel frames: {}", err);
+                    debug!("collecting kernel frames. stack = {} error = {}", stack_id, err);
                 }
             }
             (stack_id, trace)
@@ -325,7 +325,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
                     }
                 }
                 Err(err) => {
-                    debug!("collecting user frames: {}", err);
+                    debug!("collecting user frames. stack = {} err = {}", stack_id, err);
                 }
             }
             ustack_traces.insert(stack_id, trace);
