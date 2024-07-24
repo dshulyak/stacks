@@ -37,6 +37,7 @@ mod collector;
 mod parquet;
 mod perf_event;
 mod program;
+mod bpf;
 #[cfg(test)]
 mod tests;
 
@@ -115,7 +116,7 @@ struct Opt {
     switch_stacks: StackOptions,
 
     #[clap(long, default_value = "99")]
-    perf_cpu_frequncy: u64,
+    perf_cpu_frequency: u64,
     #[clap(long, default_value = "u", help = "which stacks to collect on perf event")]
     perf_cpu_stacks: StackOptions,
 
@@ -226,7 +227,7 @@ fn main() -> Result<()> {
 
     let mut skel = open_skel.load().unwrap();
 
-    let perf_fds = perf_event_per_cpu(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, opt.perf_cpu_frequncy)
+    let perf_fds = perf_event_per_cpu(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, opt.perf_cpu_frequency)
         .expect("init perf events");
     let _perf_links = attach_perf_event(&perf_fds, skel.progs_mut().handle__perf_event());
     let _sched_link = skel
@@ -301,7 +302,7 @@ fn main() -> Result<()> {
             timestamp_adjustment: adjustment,
             groups_per_file: opt.groups_per_file,
             rows_per_group: opt.rows,
-            perf_event_frequency: 1_000_000_000 / opt.perf_cpu_frequncy as i64,
+            perf_event_frequency: 1_000_000_000 / opt.perf_cpu_frequency as i64,
             compression: opt.compression,
             _non_exhaustive: (),
         },
