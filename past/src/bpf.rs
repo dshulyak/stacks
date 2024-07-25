@@ -77,7 +77,7 @@ impl Programs {
     }
 
     pub(crate) fn profile_frequency(&self) -> u64 {
-        self.profile.as_ref().map_or(0, |p| p.frequency)
+        self.profile.as_ref().map_or(1, |p| p.frequency)
     }
 
     pub(crate) fn try_from_programs(progs: impl Iterator<Item = Program>) -> Result<Self> {
