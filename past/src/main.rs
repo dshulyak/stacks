@@ -7,7 +7,6 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    thread::sleep,
     time::Duration,
 };
 
@@ -36,7 +35,7 @@ mod state;
 #[cfg(test)]
 mod tests;
 
-const DEFAULT_PROGRAMS: &str = "profile:u:99,rss:u:1,switch:k";
+const DEFAULT_PROGRAMS: &str = "profile:u:99,rss:u:29,switch:k";
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -82,7 +81,7 @@ struct Opt {
 examples:
 - profile:u:99
     collect user stacks at 99hz frequency.
-- rss:u:1
+- rss:u:29
     collect user stacks on every rss change event.
 - switch:ku
     collect kernel and user stacks on context switch event.
@@ -106,11 +105,7 @@ examples:
     )]
     bpf_stacks: u32,
 
-    #[clap(
-        long,
-        default_value = "100ms",
-        help = "determines the frequency of polling the ebpf ring buffer"
-    )]
+    #[clap(long, default_value = "1s", help = "polling interval for bpf ringbuf")]
     poll: humantime::Duration,
 
     #[clap(
@@ -278,7 +273,7 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     maps: &PastMaps,
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
-    sleep_interval: Duration,
+    poll_interval: Duration,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
@@ -291,9 +286,10 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     })?;
     let mgr = builder.build().unwrap();
     let consume = info_span!("consume");
+
     loop {
         consume.in_scope(|| {
-            if let Err(err) = mgr.consume() {
+            if let Err(err) = mgr.poll(poll_interval) {
                 warn!("consume from ring buffer: {:?}", err);
             }
         });
@@ -306,7 +302,6 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             *dropped_counter = updated_dropped_counter;
             return Err(ErrorConsume::DroppedEvents(delta));
         }
-        sleep(sleep_interval);
     }
 }
 

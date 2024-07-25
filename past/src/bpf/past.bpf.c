@@ -27,6 +27,7 @@ const volatile struct
     bool perf_kstack;
     bool rss_ustack;
     bool rss_kstack;
+    __u64 wakeup_bytes;
     __u16 rss_stat_throttle;
 } cfg = {
     .debug = false,
@@ -38,6 +39,7 @@ const volatile struct
     .perf_kstack = false,
     .rss_ustack = true,
     .rss_kstack = false,
+    .wakeup_bytes = 10 << 10,
     .rss_stat_throttle = 0,
 };
 
@@ -85,6 +87,21 @@ static __always_inline void *reserve_event(__u64 size)
         inc_dropped();
     }
     return event;
+}
+
+static __always_inline void submit_event(void *event)
+{   
+    __u64 available = bpf_ringbuf_query(&events, BPF_RB_AVAIL_DATA);
+    if (available > cfg.wakeup_bytes)
+    {
+        return bpf_ringbuf_submit(event, BPF_RB_FORCE_WAKEUP);
+    } 
+    return bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+}
+
+static __always_inline void submit_immediate(void *event)
+{
+    return bpf_ringbuf_submit(event, BPF_RB_FORCE_WAKEUP);
 }
 
 struct
@@ -277,7 +294,7 @@ int handle__sched_switch(u64 *ctx)
     {
         event->kstack = -1;
     }
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -322,7 +339,7 @@ int handle__perf_event(void *ctx)
     {
         event->kstack = -1;
     }
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -349,7 +366,7 @@ int handle__sched_process_exit(u64 *ctx)
     event->type = TYPE_PROCESS_EXIT_EVENT;
     event->timestamp = bpf_ktime_get_ns();
     event->tgid = tgid;
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -375,7 +392,7 @@ int handle__sched_process_exec(u64 *ctx)
     event->timestamp = bpf_ktime_get_ns();
     event->tgid = p->tgid;
     bpf_probe_read_kernel(&event->comm, sizeof(event->comm), &p->comm);
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_immediate(event);
     return 0;
 }
 
@@ -404,7 +421,7 @@ int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 am
     event->id = id;
     event->amount = amount;
     bpf_probe_read_user_str(&event->name, sizeof(event->name), name);
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -431,7 +448,7 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
     event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
     event->ustack = -1;
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -458,7 +475,7 @@ int BPF_USDT(past_tracing_exit_stack, u64 span_id)
     event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
     event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -484,7 +501,7 @@ int BPF_USDT(past_tracing_close, u64 span_id)
     event->pid = pid;
     event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 
@@ -578,7 +595,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
     {
         event->kstack = -1;
     }
-    bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
+    submit_event(event);
     return 0;
 }
 

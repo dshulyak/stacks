@@ -63,7 +63,7 @@ impl Display for Programs {
         if let Some(switch) = &self.switch {
             programs.push(format!("{}", switch));
         }
-        write!(f, "{}", programs.join(","))
+        write!(f, "{}", programs.join(", "))
     }
 }
 
@@ -241,7 +241,7 @@ impl Default for Rss {
     fn default() -> Self {
         Rss {
             stacks: Stacks::U,
-            throttle: 1,
+            throttle: 29,
         }
     }
 }
@@ -315,6 +315,8 @@ pub(crate) fn link<'a>(
     cfg.filter_tgid.write(true);
     cfg.filter_comm.write(true);
     cfg.debug.write(debug);
+    // is 20% good enough or better to make it configurable?
+    cfg.wakeup_bytes = events_max_entries as u64 * 30 / 100;
     if let Some(profile) = &programs.profile {
         decode_stack_options_into_bpf_cfg(&profile.stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
     }
@@ -329,6 +331,7 @@ pub(crate) fn link<'a>(
         .events()
         .set_max_entries(events_max_entries)
         .context("set events max entries")?;
+
     skel.maps_mut()
         .stackmap()
         .set_max_entries(stacks_max_entries)
