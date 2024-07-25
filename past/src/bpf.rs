@@ -1,11 +1,32 @@
-use std::{path::PathBuf, str::Split};
+use std::{fmt::Display, mem::MaybeUninit, path::PathBuf, str::Split};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use libbpf_rs::{
+    libbpf_sys::{PERF_COUNT_SW_CPU_CLOCK, PERF_TYPE_SOFTWARE},
+    skel::{OpenSkel, SkelBuilder},
+    Link,
+};
 
-enum Program {
+use crate::{
+    perf_event::{attach_perf_event, perf_event_per_cpu},
+    PastSkel, PastSkelBuilder,
+};
+
+#[derive(Debug, Clone)]
+pub(crate) enum Program {
     Profile(Profile),
     Rss(Rss),
     Switch(Switch),
+}
+
+impl Display for Program {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Program::Profile(profile) => write!(f, "{}", profile),
+            Program::Rss(rss) => write!(f, "{}", rss),
+            Program::Switch(switch) => write!(f, "{}", switch),
+        }
+    }
 }
 
 impl TryFrom<&str> for Program {
@@ -23,10 +44,27 @@ impl TryFrom<&str> for Program {
     }
 }
 
+#[derive(Debug, Clone)]
 pub(crate) struct Programs {
     profile: Option<Profile>,
     rss: Option<Rss>,
     switch: Option<Switch>,
+}
+
+impl Display for Programs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut programs = vec![];
+        if let Some(profile) = &self.profile {
+            programs.push(format!("{}", profile));
+        }
+        if let Some(rss) = &self.rss {
+            programs.push(format!("{}", rss));
+        }
+        if let Some(switch) = &self.switch {
+            programs.push(format!("{}", switch));
+        }
+        write!(f, "{}", programs.join(","))
+    }
 }
 
 impl Programs {
@@ -37,20 +75,49 @@ impl Programs {
             switch: None,
         }
     }
-}
 
-impl Default for Programs {
-    fn default() -> Self {
-        Programs {
-            profile: Some(Profile::default()),
-            rss: Some(Rss::default()),
-            switch: Some(Switch::default()),
+    pub(crate) fn profile_frequency(&self) -> u64 {
+        self.profile.as_ref().map_or(0, |p| p.frequency)
+    }
+
+    pub(crate) fn try_from_programs(progs: impl Iterator<Item = Program>) -> Result<Self> {
+        let mut programs = Programs::new();
+        for program in progs {
+            // raise an error if the program is already set
+            match program {
+                Program::Profile(profile) => {
+                    if programs.profile.is_some() {
+                        anyhow::bail!("duplicate profile. {} and {}", programs.profile.unwrap(), profile);
+                    }
+                    programs.profile = Some(profile);
+                }
+                Program::Rss(rss) => {
+                    if programs.rss.is_some() {
+                        anyhow::bail!("duplicat rss. {} and {}", programs.rss.unwrap(), rss);
+                    }
+                    programs.rss = Some(rss);
+                }
+                Program::Switch(switch) => {
+                    if programs.switch.is_some() {
+                        anyhow::bail!("duplicate switch. {} and {}", programs.switch.unwrap(), switch);
+                    }
+                    programs.switch = Some(switch);
+                }
+            }
         }
+        Ok(programs)
     }
 }
 
-struct Switch {
+#[derive(Debug, Clone)]
+pub(crate) struct Switch {
     stacks: Stacks,
+}
+
+impl Display for Switch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "switch:{}", self.stacks)
+    }
 }
 
 impl<'a> TryFrom<Split<'a, char>> for Switch {
@@ -64,7 +131,10 @@ impl<'a> TryFrom<Split<'a, char>> for Switch {
                 Ok(stacks) => {
                     switch.stacks = stacks;
                 }
-                Err(_) => anyhow::bail!("invalid configuration item for switch {}", item),
+                Err(_) => anyhow::bail!(
+                    "invalid configuration {}. correct syntax is switch:<stacks>, such as switch:ku, switch:n",
+                    item
+                ),
             }
         }
         Ok(switch)
@@ -77,13 +147,16 @@ impl Default for Switch {
     }
 }
 
-struct USDT {
-    binary: PathBuf,
-}
-
-struct Profile {
+#[derive(Debug, Clone)]
+pub(crate) struct Profile {
     stacks: Stacks,
     frequency: u64,
+}
+
+impl Display for Profile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "profile:{}:{}", self.stacks, self.frequency)
+    }
 }
 
 impl<'a> TryFrom<Split<'a, char>> for Profile {
@@ -122,9 +195,16 @@ impl Default for Profile {
     }
 }
 
-struct Rss {
+#[derive(Debug, Clone)]
+pub(crate) struct Rss {
     stacks: Stacks,
-    throttle: u64,
+    throttle: u16,
+}
+
+impl Display for Rss {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "rss:{}:{}", self.stacks, self.throttle)
+    }
 }
 
 impl<'a> TryFrom<Split<'a, char>> for Rss {
@@ -134,7 +214,7 @@ impl<'a> TryFrom<Split<'a, char>> for Rss {
         let mut rss = Rss::default();
         for item in value.take(2) {
             let maybe_stacks: Result<Stacks> = item.try_into();
-            let maybe_throttle = item.parse::<u64>();
+            let maybe_throttle = item.parse::<u16>();
             match (maybe_stacks, maybe_throttle) {
                 (Ok(stacks), Err(_)) => {
                     rss.stacks = stacks;
@@ -142,7 +222,10 @@ impl<'a> TryFrom<Split<'a, char>> for Rss {
                 (Err(_), Ok(throttle)) => {
                     rss.throttle = throttle;
                 }
-                (Err(_), Err(_)) => anyhow::bail!("invalid configuration item for rss {}", item),
+                (Err(_), Err(_)) => anyhow::bail!(
+                    "invalid {}. correct syntax is rss:<stacks>:<throttle>, such as rss:ku:16",
+                    item
+                ),
                 (Ok(stacks), Ok(throttle)) => {
                     // this is impossible but also not incorrect
                     rss.stacks = stacks;
@@ -185,4 +268,135 @@ impl TryFrom<&str> for Stacks {
             _ => anyhow::bail!("invalid stack type {}", value),
         }
     }
+}
+
+impl Display for Stacks {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Stacks::U => write!(f, "u"),
+            Stacks::K => write!(f, "k"),
+            Stacks::UK => write!(f, "uk"),
+            Stacks::KU => write!(f, "ku"),
+            Stacks::N => write!(f, "n"),
+        }
+    }
+}
+
+fn decode_stack_options_into_bpf_cfg(opts: &Stacks, kstack: &mut MaybeUninit<bool>, ustack: &mut MaybeUninit<bool>) {
+    match opts {
+        Stacks::U => {
+            kstack.write(false);
+            ustack.write(true);
+        }
+        Stacks::K => {
+            kstack.write(true);
+            ustack.write(false);
+        }
+        Stacks::UK | Stacks::KU => {
+            kstack.write(true);
+            ustack.write(true);
+        }
+        Stacks::N => {
+            kstack.write(false);
+            ustack.write(false);
+        }
+    }
+}
+
+pub(crate) fn link<'a>(
+    programs: &Programs,
+    usdt: impl Iterator<Item = &'a PathBuf>,
+    debug: bool,
+    events_max_entries: u32,
+    stacks_max_entries: u32,
+) -> Result<(PastSkel<'a>, Vec<Link>)> {
+    let mut skel = PastSkelBuilder::default().open().context("open skel")?;
+    let cfg = &mut skel.rodata_mut().cfg;
+    cfg.filter_tgid.write(true);
+    cfg.filter_comm.write(true);
+    cfg.debug.write(debug);
+    if let Some(profile) = &programs.profile {
+        decode_stack_options_into_bpf_cfg(&profile.stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
+    }
+    if let Some(rss) = &programs.rss {
+        decode_stack_options_into_bpf_cfg(&rss.stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
+        cfg.rss_stat_throttle = rss.throttle;
+    }
+    if let Some(switch) = &programs.switch {
+        decode_stack_options_into_bpf_cfg(&switch.stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
+    }
+    skel.maps_mut()
+        .events()
+        .set_max_entries(events_max_entries)
+        .context("set events max entries")?;
+    skel.maps_mut()
+        .stackmap()
+        .set_max_entries(stacks_max_entries)
+        .context("set stackmap max entries")?;
+
+    let mut skel = skel.load().context("load skel")?;
+    let mut links = vec![];
+
+    if let Some(profile) = &programs.profile {
+        let perf_fds = perf_event_per_cpu(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, profile.frequency)
+            .context("init perf events")?;
+        links.extend(attach_perf_event(&perf_fds, skel.progs_mut().handle__perf_event())?);
+    }
+    if programs.rss.is_some() {
+        links.push(
+            skel.progs_mut()
+                .handle__mm_trace_rss_stat()
+                .attach()
+                .context("attach mm_trace_rss_stat")?,
+        );
+    }
+    if programs.switch.is_some() {
+        links.push(
+            skel.progs_mut()
+                .handle__sched_switch()
+                .attach()
+                .context("attach sched_switch")?,
+        );
+    }
+    links.push(
+        skel.progs_mut()
+            .handle__sched_process_exit()
+            .attach()
+            .context("attach sched exit")?,
+    );
+    links.push(
+        skel.progs_mut()
+            .handle__sched_process_exec()
+            .attach()
+            .context("attach sched exec")?,
+    );
+
+    for u in usdt {
+        let _usdt_enter = skel
+            .progs_mut()
+            .past_tracing_enter()
+            .attach_usdt(-1, u, "past_tracing", "enter")
+            .context("usdt enter")?;
+        let _usdt_exit = skel
+            .progs_mut()
+            .past_tracing_exit()
+            .attach_usdt(-1, u, "past_tracing", "exit")
+            .context("usdt exit")?;
+        let _usdt_exit_stack = skel
+            .progs_mut()
+            .past_tracing_exit_stack()
+            .attach_usdt(-1, u, "past_tracing", "exit_stack")
+            .context("exit stack link")?;
+        let _usdt_close = skel
+            .progs_mut()
+            .past_tracing_close()
+            .attach_usdt(-1, u, "past_tracing", "close")
+            .context("usdt close")?;
+        links.push(_usdt_enter);
+        links.push(_usdt_exit);
+        links.push(_usdt_exit_stack);
+        links.push(_usdt_close);
+    }
+
+    Ok((skel, links))
 }

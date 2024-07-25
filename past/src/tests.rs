@@ -25,7 +25,7 @@ use tracing_subscriber::EnvFilter;
 use crate::{
     collector::{null_terminated, to_bytes, Frames, Received, Symbolizer},
     past::past_types,
-    program::{self, Program},
+    state,
 };
 
 #[derive(Debug, Clone)]
@@ -310,13 +310,13 @@ impl ReferenceStateMachine for RefModel {
 
 pub struct State {
     tempdir: TempDir,
-    program: Program<Arc<HashMapFrames>, TestSymbolizer>,
+    program: state::State<Arc<HashMapFrames>, TestSymbolizer>,
 }
 
 impl State {
     fn new(groups_size: usize, frames: Arc<HashMapFrames>) -> Self {
         let tempdir = TempDir::with_prefix("trace-test-").expect("failed to crete tempdir");
-        let cfg = program::Config {
+        let cfg = state::Config {
             directory: tempdir.path().to_path_buf(),
             rows_per_group: groups_size,
             groups_per_file: 1,
@@ -325,7 +325,7 @@ impl State {
             compression: Compression::UNCOMPRESSED,
             _non_exhaustive: (),
         };
-        let program = Program::new(cfg, frames, TestSymbolizer::new()).expect("failed to create program");
+        let program = state::State::new(cfg, frames, TestSymbolizer::new()).expect("failed to create program");
         State { tempdir, program }
     }
 }

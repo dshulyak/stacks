@@ -20,7 +20,7 @@ use tracing::{debug, instrument, warn};
 use crate::{
     parquet::{Event, Group, ResolvedStack},
     past::past_types,
-    program::ProcessInfo,
+    state::ProcessInfo,
 };
 
 unsafe impl Plain for past_types::switch_event {}
