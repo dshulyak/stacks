@@ -464,7 +464,6 @@ impl Symbolizer for BlazesymSymbolizer {
 
         if let Some(symboliser) = self.executable_symbolizers.get(&(exe.clone(), mtime)) {
             self.process_symbolizers.insert(tgid, symboliser.clone());
-            return Ok(buildid);
         } else {
             let symbolizer = symbolize::Symbolizer::builder()
                 .enable_code_info(false)
@@ -484,9 +483,9 @@ impl Symbolizer for BlazesymSymbolizer {
         if let Err(err) = symbolizer.symbolizer.symbolize(
             &Source::Process(Process {
                 pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
-                debug_syms: false,
+                debug_syms: true,
                 perf_map: false,
-                map_files: true,
+                map_files: false,
                 _non_exhaustive: (),
             }),
             Input::AbsAddr(&[]),
@@ -527,7 +526,7 @@ impl Symbolizer for BlazesymSymbolizer {
                 pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
                 debug_syms: true,
                 perf_map: false,
-                map_files: true,
+                map_files: false,
                 _non_exhaustive: (),
             }),
             Input::AbsAddr(addr),
