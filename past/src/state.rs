@@ -41,7 +41,7 @@ pub(crate) struct ProcessInfo {
     pub(crate) buildid: Bytes,
 }
 
-pub(crate) struct Program<Fr: Frames, Sym: Symbolizer> {
+pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
     cfg: Config,
     writer: Option<GroupWriter<File>>,
     collector: Collector,
@@ -59,7 +59,7 @@ pub(crate) struct Program<Fr: Frames, Sym: Symbolizer> {
 const PENDING_FILE_PREFIX: &str = "PENDING";
 const FILE_PREFIX: &str = "STACKS";
 
-impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
+impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
     pub(crate) fn new(cfg: Config, frames: Fr, symbolizer: Sym) -> Result<Self> {
         let stats = Stats {
             rows_in_current_file: 0,
@@ -72,7 +72,7 @@ impl<Fr: Frames, Sym: Symbolizer> Program<Fr, Sym> {
         let group = Group::new(cfg.rows_per_group, cfg.timestamp_adjustment, cfg.perf_event_frequency);
         let pg_size = page_size()?;
         let collector = Collector::new(group, pg_size);
-        Ok(Program {
+        Ok(State {
             cfg,
             writer: Some(writer),
             collector,

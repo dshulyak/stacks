@@ -2,7 +2,6 @@ use std::{
     collections::HashSet,
     fs,
     io::Read,
-    mem::MaybeUninit,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -13,19 +12,15 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use clap::{Parser, ValueEnum};
-use libbpf_rs::{
-    libbpf_sys::{PERF_COUNT_SW_CPU_CLOCK, PERF_TYPE_SOFTWARE},
-    skel::{OpenSkel, SkelBuilder},
-    MapFlags, RingBufferBuilder,
-};
+use bpf::{link, Program, Programs};
+use clap::Parser;
+use libbpf_rs::{MapFlags, RingBufferBuilder};
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
 use crate::{
     collector::{BlazesymSymbolizer, Frames, Received, Symbolizer},
     parquet::Compression,
-    perf_event::{attach_perf_event, perf_event_per_cpu},
 };
 
 mod past {
@@ -33,13 +28,15 @@ mod past {
 }
 use past::*;
 
+mod bpf;
 mod collector;
 mod parquet;
 mod perf_event;
-mod program;
-mod bpf;
+mod state;
 #[cfg(test)]
 mod tests;
+
+const DEFAULT_PROGRAMS: &str = "profile:u:99,rss:u:1,switch:k";
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -77,6 +74,25 @@ struct Opt {
     groups_per_file: usize,
 
     #[clap(
+        short,
+        num_args = 1..,
+        value_delimiter = ',',
+        default_value = DEFAULT_PROGRAMS,
+        help = r#"list of bpf programs that will be collecting data.
+examples:
+- profile:u:99
+    collect user stacks at 99hz frequency.
+- rss:u:1
+    collect user stacks on every rss change event.
+- switch:ku
+    collect kernel and user stacks on context switch event.
+- switch:n
+    do not collect stacks on context switch event.
+"#,
+    )]
+    programs: Vec<String>,
+
+    #[clap(
         long,
         default_value = "33554432",
         help = "define size in bytes of the ring buffer for events."
@@ -91,7 +107,6 @@ struct Opt {
     bpf_stacks: u32,
 
     #[clap(
-        short,
         long,
         default_value = "100ms",
         help = "determines the frequency of polling the ebpf ring buffer"
@@ -112,71 +127,11 @@ struct Opt {
     )]
     debug_bpf: bool,
 
-    #[clap(long, default_value = "k", help = "which stacks to collect on context switch event")]
-    switch_stacks: StackOptions,
-
-    #[clap(long, default_value = "99")]
-    perf_cpu_frequency: u64,
-    #[clap(long, default_value = "u", help = "which stacks to collect on perf event")]
-    perf_cpu_stacks: StackOptions,
-
-    #[clap(long, default_value = "u", help = "which stacks to collect when rss changes")]
-    rss_stacks: StackOptions,
-    #[clap(
-        long,
-        default_value = "32",
-        help = "reduce number of emitted rss events. 0 disables throttling."
-    )]
-    rss_throttle: u16,
-
     #[clap(long, default_value = "false", help = "print version and exit")]
     version: bool,
 }
 
-#[derive(Parser, Debug, Clone, ValueEnum)]
-enum StackOptions {
-    U,
-    K,
-    UK,
-    KU,
-    N,
-}
-
-fn decode_stack_options_into_bpf_cfg(
-    opts: &StackOptions,
-    kstack: &mut MaybeUninit<bool>,
-    ustack: &mut MaybeUninit<bool>,
-) {
-    match opts {
-        StackOptions::U => {
-            kstack.write(false);
-            ustack.write(true);
-        }
-        StackOptions::K => {
-            kstack.write(true);
-            ustack.write(false);
-        }
-        StackOptions::UK | StackOptions::KU => {
-            kstack.write(true);
-            ustack.write(true);
-        }
-        StackOptions::N => {
-            kstack.write(false);
-            ustack.write(false);
-        }
-    }
-}
-
 fn main() -> Result<()> {
-    let opt: Opt = Opt::parse();
-    if opt.version {
-        println!("past {}", env!("VERSION"));
-        return Ok(());
-    }
-    if opt.commands.is_empty() {
-        anyhow::bail!("at least one command must be provided");
-    }
-
     // the levels for fmt and past subscriber are intentionally different.
     // i want to collect latency for basic operations all the time to evaluate performance
     let registry = Registry::default()
@@ -196,6 +151,27 @@ fn main() -> Result<()> {
         );
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global default subscriber");
 
+    let opt: Opt = Opt::parse();
+    if opt.version {
+        println!("past {}", env!("VERSION"));
+        return Ok(());
+    }
+    if opt.commands.is_empty() {
+        anyhow::bail!("at least one command must be provided");
+    }
+    // NOTE collections in clap derive are being designed
+    // i didn't manage to make them work with a little bit of code
+    let mut programs: Vec<Program> = vec![];
+    for program in opt.programs.iter() {
+        programs.push(program.as_str().try_into()?);
+    }
+    let programs = Programs::try_from_programs(programs.into_iter())?;
+    info!(
+        "running bpf programs: {} for commands {}",
+        programs,
+        opt.commands.join(", ")
+    );
+
     let interrupt = Arc::new(AtomicBool::new(true));
     let interrupt_handler = interrupt.clone();
     ctrlc::set_handler(move || {
@@ -210,74 +186,13 @@ fn main() -> Result<()> {
         .context("current unix time")?;
     let adjustment = (current_unix - uptime).as_nanos() as u64;
 
-    let skel_builder = PastSkelBuilder::default();
-    let mut open_skel = skel_builder.open().unwrap();
-    let cfg = &mut open_skel.rodata_mut().cfg;
-    cfg.filter_tgid.write(true);
-    cfg.filter_comm.write(true);
-    cfg.debug.write(opt.debug_bpf);
-    cfg.rss_stat_throttle = opt.rss_throttle;
-
-    decode_stack_options_into_bpf_cfg(&opt.switch_stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
-    decode_stack_options_into_bpf_cfg(&opt.perf_cpu_stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
-    decode_stack_options_into_bpf_cfg(&opt.rss_stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
-
-    open_skel.maps_mut().events().set_max_entries(opt.bpf_events).unwrap();
-    open_skel.maps_mut().stackmap().set_max_entries(opt.bpf_stacks).unwrap();
-
-    let mut skel = open_skel.load().unwrap();
-
-    let perf_fds = perf_event_per_cpu(PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK, opt.perf_cpu_frequency)
-        .expect("init perf events");
-    let _perf_links = attach_perf_event(&perf_fds, skel.progs_mut().handle__perf_event());
-    let _sched_link = skel
-        .progs_mut()
-        .handle__sched_switch()
-        .attach()
-        .expect("attach sched switch");
-    let _sched_exit_link = skel
-        .progs_mut()
-        .handle__sched_process_exit()
-        .attach()
-        .expect("attach sched exit");
-    let _sched_exec_link = skel
-        .progs_mut()
-        .handle__sched_process_exec()
-        .attach()
-        .expect("attach sched exec");
-    let _rss_stat_link = skel
-        .progs_mut()
-        .handle__mm_trace_rss_stat()
-        .attach()
-        .expect("attach mm_trace_rss_stat");
-
-    let mut _usdt_links = vec![];
-    for u in opt.usdt.iter() {
-        let _usdt_enter = skel
-            .progs_mut()
-            .past_tracing_enter()
-            .attach_usdt(-1, u, "past_tracing", "enter")
-            .expect("i hope -1 works");
-        let _usdt_exit = skel
-            .progs_mut()
-            .past_tracing_exit()
-            .attach_usdt(-1, u, "past_tracing", "exit")
-            .expect("i hope -1 works");
-        let _usdt_exit_stack = skel
-            .progs_mut()
-            .past_tracing_exit_stack()
-            .attach_usdt(-1, u, "past_tracing", "exit_stack")
-            .expect("exit stack link");
-        let _usdt_close = skel
-            .progs_mut()
-            .past_tracing_close()
-            .attach_usdt(-1, u, "past_tracing", "close")
-            .expect("i hope -1 works");
-        _usdt_links.push(_usdt_enter);
-        _usdt_links.push(_usdt_exit);
-        _usdt_links.push(_usdt_exit_stack);
-        _usdt_links.push(_usdt_close);
-    }
+    let (mut skel, _links) = link(
+        &programs,
+        opt.usdt.iter(),
+        opt.debug_bpf,
+        opt.bpf_events,
+        opt.bpf_stacks,
+    )?;
 
     let zero: u8 = 0;
     for comm in opt.commands.iter() {
@@ -296,13 +211,13 @@ fn main() -> Result<()> {
             .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
     let maps = skel.maps();
-    let mut program = program::Program::new(
-        program::Config {
+    let mut program = state::State::new(
+        state::Config {
             directory: opt.dir,
             timestamp_adjustment: adjustment,
             groups_per_file: opt.groups_per_file,
             rows_per_group: opt.rows,
-            perf_event_frequency: 1_000_000_000 / opt.perf_cpu_frequency as i64,
+            perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
             compression: opt.compression,
             _non_exhaustive: (),
         },
@@ -359,7 +274,7 @@ enum ErrorConsume {
 }
 
 fn consume_events<Fr: Frames, Sym: Symbolizer>(
-    program: &mut program::Program<Fr, Sym>,
+    program: &mut state::State<Fr, Sym>,
     maps: &PastMaps,
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,

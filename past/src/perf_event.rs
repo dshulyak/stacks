@@ -6,7 +6,7 @@ use libc::{self, SYS_perf_event_open};
 pub(crate) fn attach_perf_event(
     pefds: &[i32],
     prog: &mut libbpf_rs::Program,
-) -> Vec<Result<libbpf_rs::Link, libbpf_rs::Error>> {
+) -> Result<Vec<libbpf_rs::Link>, libbpf_rs::Error> {
     pefds.iter().map(|pefd| prog.attach_perf_event(*pefd)).collect()
 }
 
