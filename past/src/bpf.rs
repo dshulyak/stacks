@@ -112,11 +112,17 @@ impl Programs {
 #[derive(Debug, Clone)]
 pub(crate) struct Switch {
     stacks: Stacks,
+    minimal_span_duration: u64,
 }
 
 impl Display for Switch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "switch:{}", self.stacks)
+        write!(
+            f,
+            "switch:{}:{}",
+            self.stacks,
+            humantime::format_duration(std::time::Duration::from_nanos(self.minimal_span_duration))
+        )
     }
 }
 
@@ -127,14 +133,19 @@ impl<'a> TryFrom<Split<'a, char>> for Switch {
         let mut switch = Switch::default();
         for item in value {
             let maybe_stacks: Result<Stacks> = item.try_into();
-            match maybe_stacks {
-                Ok(stacks) => {
+            let maybe_duration = humantime::parse_duration(item);
+            match (maybe_stacks, maybe_duration) {
+                (Ok(stacks), Err(_)) => {
                     switch.stacks = stacks;
                 }
-                Err(_) => anyhow::bail!(
-                    "invalid configuration {}. correct syntax is switch:<stacks>, such as switch:ku, switch:n",
-                    item
-                ),
+                (Err(_), Ok(duration)) => {
+                    switch.minimal_span_duration = duration.as_nanos() as u64;
+                }
+                (Err(_), Err(_)) => anyhow::bail!("invalid configuration item for switch {}", item),
+                (Ok(stacks), Ok(duration)) => {
+                    switch.minimal_span_duration = duration.as_nanos() as u64;
+                    switch.stacks = stacks;
+                }
             }
         }
         Ok(switch)
@@ -143,7 +154,10 @@ impl<'a> TryFrom<Split<'a, char>> for Switch {
 
 impl Default for Switch {
     fn default() -> Self {
-        Switch { stacks: Stacks::K }
+        Switch {
+            stacks: Stacks::K,
+            minimal_span_duration: 0,
+        }
     }
 }
 
@@ -317,15 +331,20 @@ pub(crate) fn link<'a>(
     cfg.debug.write(debug);
     // is 20% good enough or better to make it configurable?
     cfg.wakeup_bytes = events_max_entries as u64 * 30 / 100;
-    if let Some(profile) = &programs.profile {
-        decode_stack_options_into_bpf_cfg(&profile.stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
+    if let Some(Profile { stacks, frequency: _ }) = &programs.profile {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.perf_kstack, &mut cfg.perf_ustack);
     }
-    if let Some(rss) = &programs.rss {
-        decode_stack_options_into_bpf_cfg(&rss.stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
-        cfg.rss_stat_throttle = rss.throttle;
+    if let Some(Rss { stacks, throttle }) = &programs.rss {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.rss_kstack, &mut cfg.rss_ustack);
+        cfg.rss_stat_throttle = *throttle;
     }
-    if let Some(switch) = &programs.switch {
-        decode_stack_options_into_bpf_cfg(&switch.stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
+    if let Some(Switch {
+        stacks,
+        minimal_span_duration,
+    }) = &programs.switch
+    {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
+        cfg.minimal_switch_duration = *minimal_span_duration;
     }
     skel.maps_mut()
         .events()

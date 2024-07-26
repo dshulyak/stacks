@@ -83,8 +83,9 @@ examples:
     collect user stacks at 99hz frequency.
 - rss:u:29
     collect user stacks on every rss change event.
-- switch:ku
+- switch:ku:1us
     collect kernel and user stacks on context switch event.
+    bpf collector will drop all spans that are shorter than 1us.
 - switch:n
     do not collect stacks on context switch event.
 "#,
@@ -127,8 +128,6 @@ examples:
 }
 
 fn main() -> Result<()> {
-    // the levels for fmt and past subscriber are intentionally different.
-    // i want to collect latency for basic operations all the time to evaluate performance
     let registry = Registry::default()
         .with(
             tracing_past::PastSubscriber {}.with_filter(
@@ -140,7 +139,7 @@ fn main() -> Result<()> {
         .with(
             tracing_subscriber::fmt::layer().with_filter(
                 tracing_subscriber::EnvFilter::builder()
-                    .with_default_directive(LevelFilter::WARN.into())
+                    .with_default_directive(LevelFilter::INFO.into())
                     .from_env_lossy(),
             ),
         );

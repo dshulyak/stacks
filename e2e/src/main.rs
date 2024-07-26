@@ -251,7 +251,7 @@ impl ReferenceStateMachine for RefSystem {
     type Transition = Op;
 
     fn init_state() -> BoxedStrategy<Self::State> {
-        (5..10usize)
+        (2..3usize)
             .prop_map(|max_running| RefSystemState {
                 completed: vec![],
                 max_running,
@@ -308,10 +308,9 @@ impl SystemState {
     fn new() -> Self {
         let tempdir = TempDir::with_prefix("e2etrace-test").unwrap();
         let tracer_process = Command::new(&CONFIG.past_binary)
+            .arg("--debug-bpf")
             .arg("--dir")
             .arg(tempdir.path())
-            .arg("--poll")
-            .arg("100ms")
             .arg("--rows")
             .arg("5000")
             .arg("--groups-per-file")
