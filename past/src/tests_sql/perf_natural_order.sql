@@ -9,4 +9,4 @@ select
 from
     stacks
 where
-    kind == 'perf'
+    kind == 'profile'

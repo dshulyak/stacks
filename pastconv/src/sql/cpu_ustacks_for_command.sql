@@ -5,6 +5,6 @@ select
 from
     stacks
 where
-    kind = 'perf' and command = '?command'
+    kind = 'profile' and command = '?command'
 group by
     ustack

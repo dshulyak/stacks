@@ -69,9 +69,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         };
         let f = create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
         let writer = GroupWriter::with_compression(f, cfg.compression)?;
-        let group = Group::new(cfg.rows_per_group, cfg.timestamp_adjustment, cfg.perf_event_frequency);
+        let group = Group::new(cfg.rows_per_group);
         let pg_size = page_size()?;
-        let collector = Collector::new(group, pg_size);
+        let collector = Collector::new(group, pg_size, cfg.timestamp_adjustment, cfg.perf_event_frequency);
         Ok(State {
             cfg,
             writer: Some(writer),
@@ -128,7 +128,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.symbolizer_tgid_cleanup.insert(event.tgid);
             }
             Received::TraceEnter(_) | Received::Unknown(_) => {}
-            Received::PerfStack(event) => {
+            Received::Profile(event) => {
                 // -1 is set if stack is not collected
                 if event.ustack < -1 {
                     self.stats
@@ -140,7 +140,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
-            Received::Switch(_) | Received::RssStat(_) | Received::TraceExit(_) | Received::TraceClose(_) => {
+            Received::Switch(_) | Received::Rss(_) | Received::TraceExit(_) | Received::TraceClose(_) => {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
@@ -155,8 +155,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             self.writer
                 .as_mut()
                 .expect("writer must exist")
-                .write(&mut self.collector.group)?;
-            self.collector.group.reuse();
+                .write(self.collector.group.for_writing())?;
             for tgid in self.symbolizer_tgid_cleanup.drain() {
                 self.symbolizer.drop_symbolizer(tgid)?;
             }
@@ -201,8 +200,7 @@ fn on_exit<W: Write + Send>(
     if !stack_group.is_empty() {
         debug!("symbolizing remaining stacks and flushing group");
         symbolize(symbolizer, stacks, stack_group);
-        stack_writer.write(stack_group)?;
-        stack_group.reuse();
+        stack_writer.write(stack_group.for_writing())?;
     }
     stack_writer.close()?;
     Ok(())
