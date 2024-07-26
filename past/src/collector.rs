@@ -456,7 +456,8 @@ impl Symbolizer for BlazesymSymbolizer {
     }
 
     fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes> {
-        let (exe, mtime) = exe_name_and_change_time(tgid)?;
+        let (exe, mtime) =
+            exe_name_and_change_time(tgid).with_context(|| format!("reading exe name and mtime for tgid={}", tgid))?;
         let buildid = read_elf_build_id(&exe)
             .context("read buildid")?
             .map(|buildid| Bytes::copy_from_slice(buildid.as_ref()))

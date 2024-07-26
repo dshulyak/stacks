@@ -29,6 +29,7 @@ const volatile struct
     bool rss_kstack;
     __u64 wakeup_bytes;
     __u16 rss_stat_throttle;
+    __u64 minimal_switch_duration;
 } cfg = {
     .debug = false,
     .filter_tgid = false,
@@ -41,6 +42,7 @@ const volatile struct
     .rss_kstack = false,
     .wakeup_bytes = 10 << 10,
     .rss_stat_throttle = 0,
+    .minimal_switch_duration = 0,
 };
 
 // output is printed to /sys/kernel/debug/tracing/trace_pipe
@@ -263,6 +265,12 @@ int handle__sched_switch(u64 *ctx)
     u32 tgid = prev->tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
+        return 0;
+    }
+    u64 delta = end - start;
+    if (delta < cfg.minimal_switch_duration)
+    {
+        bpf_printk_debug("duration (%d) is less than minimal (%d)\n", delta, cfg.minimal_switch_duration);  
         return 0;
     }
     struct switch_event *event = reserve_event(sizeof(struct switch_event));
