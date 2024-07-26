@@ -1,13 +1,8 @@
 use std::{
-    collections::HashSet,
-    fs,
-    io::Read,
-    path::{Path, PathBuf},
-    sync::{
+    collections::HashSet, fs, io::Read, path::{Path, PathBuf}, sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
-    },
-    time::Duration,
+    }, time::Duration
 };
 
 use anyhow::{Context, Result};
@@ -29,6 +24,7 @@ mod past {
 use past::*;
 
 mod bpf;
+mod bpf_profile;
 mod parquet;
 mod perf_event;
 mod state;
@@ -231,8 +227,9 @@ fn main() -> Result<()> {
 
     let mut dropped_counter = 0;
     let sleep_interval = opt.poll.into();
+    let progs = skel.progs();
     loop {
-        match consume_events(&mut program, &maps, &mut dropped_counter, &interrupt, sleep_interval) {
+        match consume_events(&mut program, &maps, &progs, &mut dropped_counter, &interrupt, sleep_interval) {
             Ok(_) => break,
             Err(ErrorConsume::DroppedEvents(dropped)) => {
                 warn!("program missed events {}. will need to reinitialize state", dropped);
@@ -271,10 +268,12 @@ enum ErrorConsume {
 fn consume_events<Fr: Frames, Sym: Symbolizer>(
     program: &mut state::State<Fr, Sym>,
     maps: &PastMaps,
+    progs: &PastProgs,
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
     poll_interval: Duration,
 ) -> Result<(), ErrorConsume> {
+    let stats_fd = bpf_profile::enable()?;
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
         if let Err(err) = program.on_event(buf.into()) {
@@ -310,6 +309,14 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             *dropped_counter = updated_dropped_counter;
             return Err(ErrorConsume::DroppedEvents(delta));
         }
+            let stats = stats_fd.get_stats(progs.handle__mm_trace_rss_stat())?;
+            info!(
+                "program {} runtime_ns: {} runtime_cnt: {}",
+                stats.name,
+                stats.runtime_ns,
+                stats.runtime_cnt
+            );
+        
     }
 }
 
