@@ -18,7 +18,7 @@ use plain::Plain;
 use tracing::{debug, instrument, warn};
 
 use crate::{
-    parquet::{Event, Group, ResolvedStack},
+    parquet::{Event, EventKind, Group, ResolvedStack},
     past::past_types,
     state::ProcessInfo,
 };
@@ -44,13 +44,13 @@ fn to_event<T: Plain>(bytes: &[u8]) -> &T {
 #[derive(Debug, Clone)]
 pub(crate) enum Received<'a> {
     Switch(&'a past_types::switch_event),
-    PerfStack(&'a past_types::perf_cpu_event),
+    Profile(&'a past_types::perf_cpu_event),
     ProcessExec(&'a past_types::process_exec_event),
     ProcessExit(&'a past_types::process_exit_event),
     TraceEnter(&'a past_types::tracing_enter_event),
     TraceExit(&'a past_types::tracing_exit_event),
     TraceClose(&'a past_types::tracing_close_event),
-    RssStat(&'a past_types::rss_stat_event),
+    Rss(&'a past_types::rss_stat_event),
     Unknown(&'a [u8]),
 }
 
@@ -58,13 +58,13 @@ impl<'a> From<&'a [u8]> for Received<'a> {
     fn from(bytes: &'a [u8]) -> Self {
         match bytes[0] {
             0 => Received::Switch(to_event(bytes)),
-            1 => Received::PerfStack(to_event(bytes)),
+            1 => Received::Profile(to_event(bytes)),
             2 => Received::TraceEnter(to_event(bytes)),
             3 => Received::TraceExit(to_event(bytes)),
             4 => Received::TraceClose(to_event(bytes)),
             5 => Received::ProcessExit(to_event(bytes)),
             6 => Received::ProcessExec(to_event(bytes)),
-            7 => Received::RssStat(to_event(bytes)),
+            7 => Received::Rss(to_event(bytes)),
             _ => Received::Unknown(bytes),
         }
     }
@@ -84,14 +84,18 @@ pub(crate) struct Collector {
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
     pub group: Group,
     page_size: u64,
+    timestamp_adjustment: u64,
+    perf_frequency: i64,
 }
 
 impl Collector {
-    pub(crate) fn new(group: Group, page_size: u64) -> Self {
+    pub(crate) fn new(group: Group, page_size: u64, timestamp_adjustment: u64, perf_frequency: i64) -> Self {
         Self {
             tgid_span_id_pid_to_enter: BTreeMap::new(),
             group,
             page_size,
+            timestamp_adjustment,
+            perf_frequency,
         }
     }
 
@@ -111,8 +115,9 @@ impl Collector {
                         anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
-                self.group.collect(Event::Switch {
-                    ts: event.end as i64,
+                self.group.save_event(Event {
+                    ts: (event.end + self.timestamp_adjustment) as i64,
+                    kind: EventKind::Switch,
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
@@ -121,9 +126,10 @@ impl Collector {
                     buildid: process_info.buildid.clone(),
                     ustack: event.ustack,
                     kstack: event.kstack,
+                    ..Default::default()
                 });
             }
-            Received::PerfStack(event) => {
+            Received::Profile(event) => {
                 if event.ustack > 0 || event.kstack > 0 {
                     let process_info = match tgid_to_process_info.get(&event.tgid) {
                         Some(command) => command,
@@ -131,8 +137,10 @@ impl Collector {
                             anyhow::bail!("missing command for pid {}", event.tgid);
                         }
                     };
-                    self.group.collect(Event::Profile {
-                        ts: event.timestamp as i64,
+                    self.group.save_event(Event {
+                        ts: (event.timestamp + self.timestamp_adjustment) as i64,
+                        duration: self.perf_frequency,
+                        kind: EventKind::Profile,
                         cpu: event.cpu_id as i32,
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
@@ -140,24 +148,27 @@ impl Collector {
                         buildid: process_info.buildid.clone(),
                         ustack: event.ustack,
                         kstack: event.kstack,
+                        ..Default::default()
                     });
                 };
             }
-            Received::RssStat(event) => {
+            Received::Rss(event) => {
                 let process_info = match tgid_to_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
                         anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
-                self.group.collect(Event::RssStat {
-                    ts: event.ts as i64,
+                self.group.save_event(Event {
+                    ts: (event.ts + self.timestamp_adjustment) as i64,
+                    kind: EventKind::Rss,
                     tgid: event.tgid as i32,
                     command: process_info.command.clone(),
                     buildid: process_info.buildid.clone(),
-                    amount: event.rss * self.page_size,
+                    amount: (event.rss * self.page_size) as i64,
                     ustack: event.ustack,
                     kstack: event.kstack,
+                    ..Default::default()
                 });
             }
             Received::TraceEnter(event) => {
@@ -197,9 +208,10 @@ impl Collector {
                         anyhow::bail!("missing span for pid {} span_id {}", event.pid, event.span_id);
                     }
                 };
-                self.group.collect(Event::TraceExit {
-                    ts: event.ts as i64,
+                self.group.save_event(Event {
+                    ts: (event.ts + self.timestamp_adjustment) as i64,
                     duration: (event.ts - span.last_enter_ts) as i64,
+                    kind: EventKind::TraceExit,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
@@ -209,8 +221,9 @@ impl Collector {
                     parent_id: span.parent_id as i64,
                     id: span.id as i64,
                     amount: span.amount as i64,
-                    name: span.name.clone(),
+                    trace_name: span.name.clone(),
                     ustack: event.ustack,
+                    ..Default::default()
                 });
             }
             Received::TraceClose(event) => {
@@ -232,9 +245,10 @@ impl Collector {
                         continue;
                     }
                     if let Some(process_info) = process_info {
-                        self.group.collect(Event::TraceClose {
-                            ts: event.ts as i64,
+                        self.group.save_event(Event {
+                            ts: (event.ts + self.timestamp_adjustment) as i64,
                             duration: (event.ts - span.first_enter_ts) as i64,
+                            kind: EventKind::TraceClose,
                             cpu: event.cpu_id as i32,
                             tgid: event.tgid as i32,
                             pid: pid as i32,
@@ -244,7 +258,8 @@ impl Collector {
                             parent_id: span.parent_id as i64,
                             id: span.id as i64,
                             amount: span.amount as i64,
-                            name: span.name.clone(),
+                            trace_name: span.name.clone(),
+                            ..Default::default()
                         });
                     }
                 }
@@ -282,7 +297,7 @@ pub(crate) trait Frames {
 #[instrument(skip_all)]
 pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
     let mut resolved_addresses: HashMap<(i32, u64), ResolvedStack> = HashMap::new();
-    let kstacks: HashSet<_> = stack_group.unresolved_kstacks().collect();
+    let kstacks: HashSet<_> = stack_group.raw_kstacks().collect();
     let mut unique = HashSet::new();
     let traces: HashMap<i32, Result<Vec<u64>>> = kstacks
         .into_iter()
@@ -320,7 +335,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
 
     let mut ustack_traces = HashMap::new();
     let mut ustacks = HashMap::new();
-    for (tgid, ustack) in stack_group.unresolved_ustacks() {
+    for (tgid, ustack) in stack_group.raw_ustacks() {
         let ustacks = ustacks.entry(tgid).or_insert_with(HashSet::new);
         ustacks.insert(ustack);
     }
@@ -360,8 +375,8 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
         }
     }
 
-    let original_kstacks = stack_group.unresolved_kstacks().collect::<Vec<_>>();
-    let original_ustacks = stack_group.unresolved_ustacks().collect::<Vec<_>>();
+    let original_kstacks = stack_group.raw_kstacks().collect::<Vec<_>>();
+    let original_ustacks = stack_group.raw_ustacks().collect::<Vec<_>>();
 
     let zipped = original_kstacks.into_iter().zip(original_ustacks);
     for (kstack_id, (tgid, ustack_id)) in zipped {
@@ -370,16 +385,16 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
             to_symbols(&traces, &resolved_addresses, -1, kstack_id),
         ) {
             (Some(ustacks), Some(kstacks)) => {
-                stack_group.resolve(ustacks, kstacks);
+                stack_group.update_stacks_with_symbolized(ustacks, kstacks);
             }
             (Some(ustacks), None) => {
-                stack_group.resolve(ustacks, empty());
+                stack_group.update_stacks_with_symbolized(ustacks, empty());
             }
             (None, Some(kstacks)) => {
-                stack_group.resolve(empty(), kstacks);
+                stack_group.update_stacks_with_symbolized(empty(), kstacks);
             }
             (None, None) => {
-                stack_group.resolve(empty(), empty());
+                stack_group.update_stacks_with_symbolized(empty(), empty());
             }
         }
     }

@@ -5,6 +5,6 @@ select
 from
     stacks
 where
-    kind = 'perf' and buildid = decode('?buildid', 'hex')
+    kind = 'profile' and buildid = decode('?buildid', 'hex')
 group by
     ustack
