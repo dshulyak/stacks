@@ -289,7 +289,15 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     loop {
         consume.in_scope(|| {
             if let Err(err) = mgr.poll(poll_interval) {
-                warn!("consume from ring buffer: {:?}", err);
+                if err.kind() == libbpf_rs::ErrorKind::Interrupted {
+                    info!(
+                        "process was interrupted {:?}. will try to consume remaining events",
+                        err
+                    );
+                    _ = mgr.consume();
+                } else {
+                    warn!("consume from ring buffer: {:?}", err);
+                }
             }
         });
         if !interrupt.load(Ordering::Relaxed) {
