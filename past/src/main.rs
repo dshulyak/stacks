@@ -18,8 +18,9 @@ use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
 use crate::{
-    collector::{BlazesymSymbolizer, Frames, Received, Symbolizer},
     parquet::Compression,
+    state::Received,
+    symbolizer::{BlazesymSymbolizer, Frames, Symbolizer},
 };
 
 mod past {
@@ -28,10 +29,10 @@ mod past {
 use past::*;
 
 mod bpf;
-mod collector;
 mod parquet;
 mod perf_event;
 mod state;
+mod symbolizer;
 #[cfg(test)]
 mod tests;
 

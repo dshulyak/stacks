@@ -269,29 +269,26 @@ impl Group {
         self.raw_ustack.push(ustack);
         self.raw_kstack.push(kstack);
 
-        if *self.timestamp.last().expect("timestamp is always updated with record") != ts {
-            // find correct position for new record
-            // the events are emitted in the order each cpu processes them
-            // however there could be
-            let mut i = self.timestamp.len() - 1;
-            while i > 0 && self.timestamp[i - 1] > ts {
-                self.timestamp.swap(i, i - 1);
-                self.duration.swap(i, i - 1);
-                self.kind.swap(i, i - 1);
-                self.cpu.swap(i, i - 1);
-                self.tgid.swap(i, i - 1);
-                self.pid.swap(i, i - 1);
-                self.span_id.swap(i, i - 1);
-                self.parent_id.swap(i, i - 1);
-                self.id.swap(i, i - 1);
-                self.amount.swap(i, i - 1);
-                self.command.swap(i, i - 1);
-                self.trace_name.swap(i, i - 1);
-                self.buildid.swap(i, i - 1);
-                self.raw_kstack.swap(i, i - 1);
-                self.raw_ustack.swap(i, i - 1);
-                i -= 1;
-            }
+        // find correct position for new record
+        // the events are emitted in the order each cpu processes them
+        let mut i = self.timestamp.len() - 1;
+        while i > 0 && self.timestamp[i - 1] > ts {
+            self.timestamp.swap(i, i - 1);
+            self.duration.swap(i, i - 1);
+            self.kind.swap(i, i - 1);
+            self.cpu.swap(i, i - 1);
+            self.tgid.swap(i, i - 1);
+            self.pid.swap(i, i - 1);
+            self.span_id.swap(i, i - 1);
+            self.parent_id.swap(i, i - 1);
+            self.id.swap(i, i - 1);
+            self.amount.swap(i, i - 1);
+            self.command.swap(i, i - 1);
+            self.trace_name.swap(i, i - 1);
+            self.buildid.swap(i, i - 1);
+            self.raw_kstack.swap(i, i - 1);
+            self.raw_ustack.swap(i, i - 1);
+            i -= 1;
         }
     }
 

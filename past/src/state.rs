@@ -1,5 +1,5 @@
 use std::{
-    collections::{hash_map, HashMap, HashSet},
+    collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
     fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
@@ -8,11 +8,13 @@ use std::{
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use plain::Plain;
 use tracing::{debug, info, warn};
 
 use crate::{
-    collector::{null_terminated, symbolize, Collector, Frames, Received, Symbolizer},
-    parquet::{Compression, Group, GroupWriter},
+    parquet::{Compression, Event, EventKind, Group, GroupWriter},
+    past_types,
+    symbolizer::{symbolize, Frames, Symbolizer},
 };
 
 #[derive(Debug)]
@@ -41,15 +43,27 @@ pub(crate) struct ProcessInfo {
     pub(crate) buildid: Bytes,
 }
 
+#[derive(Debug)]
+struct SpanEnter {
+    parent_id: u64,
+    id: u64,
+    amount: u64,
+    name: Bytes,
+    first_enter_ts: u64,
+    last_enter_ts: u64,
+}
+
 pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
     cfg: Config,
     writer: Option<GroupWriter<File>>,
-    collector: Collector,
     frames: Fr,
     symbolizer: Sym,
     // cleanup should occur after frames from last batch were collected
     symbolizer_tgid_cleanup: HashSet<u32>,
-    tgid_to_command: HashMap<u32, ProcessInfo>,
+    tgid_process_info: HashMap<u32, ProcessInfo>,
+    tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
+    group: Group,
+    page_size: u64,
     stats: Stats,
 }
 
@@ -70,27 +84,207 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         let f = create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
         let writer = GroupWriter::with_compression(f, cfg.compression)?;
         let group = Group::new(cfg.rows_per_group);
-        let pg_size = page_size()?;
-        let collector = Collector::new(group, pg_size, cfg.timestamp_adjustment, cfg.perf_event_frequency);
+        let page_size = page_size()?;
         Ok(State {
             cfg,
             writer: Some(writer),
-            collector,
             frames,
             symbolizer,
             symbolizer_tgid_cleanup: HashSet::new(),
-            tgid_to_command: HashMap::new(),
+            tgid_process_info: HashMap::new(),
+            tgid_span_id_pid_to_enter: BTreeMap::new(),
+            group,
+            page_size,
             stats,
         })
     }
 
     pub(crate) fn drop_known_state(&mut self) -> Result<()> {
-        for tgid in self.tgid_to_command.keys() {
+        for tgid in self.tgid_process_info.keys() {
             self.symbolizer.drop_symbolizer(*tgid)?;
         }
-        self.collector.drop_known_spans();
-        self.tgid_to_command.clear();
+        self.tgid_process_info.clear();
+        self.tgid_span_id_pid_to_enter.clear();
         self.symbolizer_tgid_cleanup.clear();
+        Ok(())
+    }
+
+    fn save_event(&mut self, event: Received) -> Result<()> {
+        // all integers are cast to signed because of the API provided by rust parquet lib
+        // arithmetic operations will be correctly performed on unsigned integers, configured in schema
+        // TODO maybe i should move cast closer to the schema definition
+        match event {
+            Received::Switch(event) => {
+                let process_info = match self.tgid_process_info.get(&event.tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", event.tgid);
+                    }
+                };
+                self.group.save_event(Event {
+                    ts: (event.end + self.cfg.timestamp_adjustment) as i64,
+                    kind: EventKind::Switch,
+                    duration: (event.end - event.start) as i64,
+                    cpu: event.cpu_id as i32,
+                    tgid: event.tgid as i32,
+                    pid: event.pid as i32,
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
+                    ustack: event.ustack,
+                    kstack: event.kstack,
+                    ..Default::default()
+                });
+            }
+            Received::Profile(event) => {
+                if event.ustack > 0 || event.kstack > 0 {
+                    let process_info = match self.tgid_process_info.get(&event.tgid) {
+                        Some(command) => command,
+                        None => {
+                            anyhow::bail!("missing command for pid {}", event.tgid);
+                        }
+                    };
+                    self.group.save_event(Event {
+                        ts: (event.timestamp + self.cfg.timestamp_adjustment) as i64,
+                        duration: self.cfg.perf_event_frequency,
+                        kind: EventKind::Profile,
+                        cpu: event.cpu_id as i32,
+                        tgid: event.tgid as i32,
+                        pid: event.pid as i32,
+                        command: process_info.command.clone(),
+                        buildid: process_info.buildid.clone(),
+                        ustack: event.ustack,
+                        kstack: event.kstack,
+                        ..Default::default()
+                    });
+                };
+            }
+            Received::Rss(event) => {
+                let process_info = match self.tgid_process_info.get(&event.tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", event.tgid);
+                    }
+                };
+                self.group.save_event(Event {
+                    ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                    kind: EventKind::Rss,
+                    tgid: event.tgid as i32,
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
+                    amount: (event.rss * self.page_size) as i64,
+                    ustack: event.ustack,
+                    kstack: event.kstack,
+                    ..Default::default()
+                });
+            }
+            Received::TraceEnter(event) => {
+                let entry = self
+                    .tgid_span_id_pid_to_enter
+                    .entry((event.tgid, event.span_id, event.pid));
+                match entry {
+                    btree_map::Entry::Vacant(vacant) => {
+                        vacant.insert(SpanEnter {
+                            parent_id: event.parent_id,
+                            id: event.id,
+                            amount: event.amount,
+                            name: Bytes::copy_from_slice(null_terminated(&event.name)),
+                            first_enter_ts: event.ts,
+                            last_enter_ts: event.ts,
+                        });
+                    }
+                    btree_map::Entry::Occupied(mut occupied) => {
+                        let span = occupied.get_mut();
+                        span.last_enter_ts = event.ts;
+                    }
+                };
+            }
+            Received::TraceExit(event) => {
+                let process_info = match self.tgid_process_info.get(&event.tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", event.tgid);
+                    }
+                };
+                let span = match self
+                    .tgid_span_id_pid_to_enter
+                    .get(&(event.tgid, event.span_id, event.pid))
+                {
+                    Some(span) => span,
+                    None => {
+                        anyhow::bail!("missing span for pid {} span_id {}", event.pid, event.span_id);
+                    }
+                };
+                self.group.save_event(Event {
+                    ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                    duration: (event.ts - span.last_enter_ts) as i64,
+                    kind: EventKind::TraceExit,
+                    cpu: event.cpu_id as i32,
+                    tgid: event.tgid as i32,
+                    pid: event.pid as i32,
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
+                    span_id: event.span_id as i64,
+                    parent_id: span.parent_id as i64,
+                    id: span.id as i64,
+                    amount: span.amount as i64,
+                    trace_name: span.name.clone(),
+                    ustack: event.ustack,
+                    ..Default::default()
+                });
+            }
+            Received::TraceClose(event) => {
+                // record it only once for any pid where this span_id has entered before
+                let pids = self
+                    .tgid_span_id_pid_to_enter
+                    .range((event.tgid, event.span_id, 0)..(event.tgid, event.span_id, u32::MAX))
+                    .map(|(k, _)| k.2)
+                    .collect::<Vec<_>>();
+                let process_info = self.tgid_process_info.get(&pids[0]);
+                for (i, pid) in pids.into_iter().enumerate() {
+                    let span = match self.tgid_span_id_pid_to_enter.remove(&(event.tgid, event.span_id, pid)) {
+                        Some(span) => span,
+                        None => {
+                            anyhow::bail!("missing span for pid {} span_id {}", pid, event.span_id);
+                        }
+                    };
+                    if i > 0 {
+                        continue;
+                    }
+                    if let Some(process_info) = process_info {
+                        self.group.save_event(Event {
+                            ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                            duration: (event.ts - span.first_enter_ts) as i64,
+                            kind: EventKind::TraceClose,
+                            cpu: event.cpu_id as i32,
+                            tgid: event.tgid as i32,
+                            pid: pid as i32,
+                            command: process_info.command.clone(),
+                            buildid: process_info.buildid.clone(),
+                            span_id: event.span_id as i64,
+                            parent_id: span.parent_id as i64,
+                            id: span.id as i64,
+                            amount: span.amount as i64,
+                            trace_name: span.name.clone(),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            Received::ProcessExec(_) => {}
+            Received::ProcessExit(event) => {
+                let entries = self
+                    .tgid_span_id_pid_to_enter
+                    .range((event.tgid, 0, 0)..(event.tgid, u64::MAX, u32::MAX))
+                    .map(|(k, _)| (k.1, k.2))
+                    .collect::<Vec<_>>();
+                for (span_id, pid) in entries {
+                    self.tgid_span_id_pid_to_enter.remove(&(event.tgid, span_id, pid));
+                }
+            }
+            Received::Unknown(event) => {
+                anyhow::bail!("unknown event type: {:?}", event);
+            }
+        }
         Ok(())
     }
 
@@ -107,7 +301,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     }
                 };
                 let comm = null_terminated(&event.comm);
-                match self.tgid_to_command.entry(event.tgid) {
+                match self.tgid_process_info.entry(event.tgid) {
                     hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(ProcessInfo {
                             command: Bytes::copy_from_slice(comm),
@@ -146,16 +340,16 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             }
         }
 
-        if let Err(err) = self.collector.collect(&self.tgid_to_command, event) {
+        if let Err(err) = self.save_event(event) {
             warn!("failed to collect event: {:?}", err);
         }
-        if self.collector.group.is_full() {
+        if self.group.is_full() {
             debug!("group is full, symbolizing and flushing");
-            symbolize(&self.symbolizer, &self.frames, &mut self.collector.group);
+            symbolize(&self.symbolizer, &self.frames, &mut self.group);
             self.writer
                 .as_mut()
                 .expect("writer must exist")
-                .write(self.collector.group.for_writing())?;
+                .write(self.group.for_writing())?;
             for tgid in self.symbolizer_tgid_cleanup.drain() {
                 self.symbolizer.drop_symbolizer(tgid)?;
             }
@@ -179,7 +373,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             self.stats.missing_stacks_counter.clear();
         }
         if let Some(writer) = self.writer.take() {
-            on_exit(writer, &mut self.collector.group, &self.symbolizer, &self.frames).context("closing last file")?;
+            on_exit(writer, &mut self.group, &self.symbolizer, &self.frames).context("closing last file")?;
             move_file_with_timestamp(
                 &self.cfg.directory,
                 PENDING_FILE_PREFIX,
@@ -223,4 +417,58 @@ fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, inde
     let to = dir.join(format!("{}-{}-{}.parquet", to_prefix, index, now));
     fs::rename(from, to)?;
     Ok(())
+}
+
+unsafe impl Plain for past_types::switch_event {}
+unsafe impl Plain for past_types::perf_cpu_event {}
+unsafe impl Plain for past_types::tracing_enter_event {}
+unsafe impl Plain for past_types::tracing_exit_event {}
+unsafe impl Plain for past_types::tracing_close_event {}
+unsafe impl Plain for past_types::process_exit_event {}
+unsafe impl Plain for past_types::process_exec_event {}
+unsafe impl Plain for past_types::rss_stat_event {}
+
+#[cfg(test)]
+pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
+    unsafe { plain::as_bytes(event) }
+}
+
+fn to_event<T: Plain>(bytes: &[u8]) -> &T {
+    plain::from_bytes(bytes).expect("failed to convert bytes to event")
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Received<'a> {
+    Switch(&'a past_types::switch_event),
+    Profile(&'a past_types::perf_cpu_event),
+    ProcessExec(&'a past_types::process_exec_event),
+    ProcessExit(&'a past_types::process_exit_event),
+    TraceEnter(&'a past_types::tracing_enter_event),
+    TraceExit(&'a past_types::tracing_exit_event),
+    TraceClose(&'a past_types::tracing_close_event),
+    Rss(&'a past_types::rss_stat_event),
+    Unknown(&'a [u8]),
+}
+
+impl<'a> From<&'a [u8]> for Received<'a> {
+    fn from(bytes: &'a [u8]) -> Self {
+        match bytes[0] {
+            0 => Received::Switch(to_event(bytes)),
+            1 => Received::Profile(to_event(bytes)),
+            2 => Received::TraceEnter(to_event(bytes)),
+            3 => Received::TraceExit(to_event(bytes)),
+            4 => Received::TraceClose(to_event(bytes)),
+            5 => Received::ProcessExit(to_event(bytes)),
+            6 => Received::ProcessExec(to_event(bytes)),
+            7 => Received::Rss(to_event(bytes)),
+            _ => Received::Unknown(bytes),
+        }
+    }
+}
+
+pub(crate) fn null_terminated(bytes: &[u8]) -> &[u8] {
+    match bytes.iter().position(|&b| b == 0) {
+        Some(pos) => &bytes[..pos],
+        None => bytes,
+    }
 }

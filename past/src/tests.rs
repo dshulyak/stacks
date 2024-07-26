@@ -23,9 +23,9 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    collector::{null_terminated, to_bytes, Frames, Received, Symbolizer},
     past::past_types,
-    state,
+    state::{self, null_terminated, to_bytes, Received},
+    symbolizer::{Frames, Symbolizer},
 };
 
 #[derive(Debug, Clone)]
@@ -405,10 +405,10 @@ async fn session(dir: &Path) -> Result<SessionContext> {
 }
 
 async fn verify_switches(ctx: &SessionContext, ref_state: &RefState) {
-    // show(ctx, SWITCH_QUERY_WITH_STACKS).await;
-    // for trace in ref_state.persisted_traces.iter() {
-    //     println!("{:?}", trace);
-    // }
+    show(ctx, SWITCH_QUERY_WITH_STACKS).await;
+    for trace in ref_state.persisted_traces.iter() {
+        println!("{:?}", trace);
+    }
 
     let batch = read(ctx, SWITCH_QUERY_WITH_STACKS).await;
     let tgid_to_comm = ref_state
