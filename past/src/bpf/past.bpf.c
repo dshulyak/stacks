@@ -75,15 +75,35 @@ __always_inline void inc_dropped()
     }
 }
 
+struct inner_events
+{
+    __uint(type, BPF_MAP_TYPE_RINGBUF);
+    __uint(max_entries, 1024 * 1024);
+};
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_ARRAY_OF_MAPS);
+    __uint(max_entries, 1024); //
+    __type(key, __u32);
+    __array(values, struct inner_events);
+} events_per_cpu SEC(".maps");
+
 struct
 {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
     __uint(max_entries, 64 * 1024 * 1024);
 } events SEC(".maps");
 
-static __always_inline void *reserve_event(__u64 size)
+static __always_inline void *reserve_event_on_cpu(int cpu, __u64 size)
 {
-    void *event = bpf_ringbuf_reserve(&events, size, 0);
+    void *ringbuf = bpf_map_lookup_elem(&events_per_cpu, &cpu);
+    if (!ringbuf)
+    {
+        bpf_printk_debug("entry for cpu %d does not exist\n", cpu);
+        return NULL;
+    }
+    void *event = bpf_ringbuf_reserve(ringbuf, size, 0);
     if (!event)
     {
         inc_dropped();
@@ -92,12 +112,12 @@ static __always_inline void *reserve_event(__u64 size)
 }
 
 static __always_inline void submit_event(void *event)
-{   
+{
     __u64 available = bpf_ringbuf_query(&events, BPF_RB_AVAIL_DATA);
     if (available > cfg.wakeup_bytes)
     {
         return bpf_ringbuf_submit(event, BPF_RB_FORCE_WAKEUP);
-    } 
+    }
     return bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
 }
 
@@ -270,10 +290,11 @@ int handle__sched_switch(u64 *ctx)
     u64 delta = end - start;
     if (delta < cfg.minimal_switch_duration)
     {
-        bpf_printk_debug("duration (%d) is less than minimal (%d)\n", delta, cfg.minimal_switch_duration);  
+        bpf_printk_debug("duration (%d) is less than minimal (%d)\n", delta, cfg.minimal_switch_duration);
         return 0;
     }
-    struct switch_event *event = reserve_event(sizeof(struct switch_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct switch_event *event = reserve_event_on_cpu(cpu, sizeof(struct switch_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping switch event\n");
@@ -284,7 +305,6 @@ int handle__sched_switch(u64 *ctx)
     event->end = end;
     event->pid = prev->pid;
     event->tgid = prev->tgid;
-    event->cpu_id = bpf_get_smp_processor_id();
     if (cfg.switch_ustack)
     {
         event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
@@ -320,7 +340,8 @@ int handle__perf_event(void *ctx)
     {
         return 0;
     }
-    struct perf_cpu_event *event = reserve_event(sizeof(struct perf_cpu_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct perf_cpu_event *event = reserve_event_on_cpu(cpu, sizeof(struct perf_cpu_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping perf event\n");
@@ -330,7 +351,6 @@ int handle__perf_event(void *ctx)
     event->timestamp = bpf_ktime_get_ns();
     event->tgid = tgid;
     event->pid = pid;
-    event->cpu_id = bpf_get_smp_processor_id();
     if (cfg.perf_ustack)
     {
         event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
@@ -365,7 +385,8 @@ int handle__sched_process_exit(u64 *ctx)
         return 0;
     }
     bpf_map_delete_elem(&filter_tgid, &tgid);
-    struct process_exit_event *event = reserve_event(sizeof(struct process_exit_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct process_exit_event *event = reserve_event_on_cpu(cpu, sizeof(struct process_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping process exit event\n");
@@ -390,7 +411,8 @@ int handle__sched_process_exec(u64 *ctx)
     {
         return 0;
     }
-    struct process_exec_event *event = reserve_event(sizeof(struct process_exec_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct process_exec_event *event = reserve_event_on_cpu(cpu, sizeof(struct process_exec_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping process exec event\n");
@@ -414,7 +436,8 @@ int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 am
     {
         return 0;
     }
-    struct tracing_enter_event *event = reserve_event(sizeof(struct tracing_enter_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct tracing_enter_event *event = reserve_event_on_cpu(cpu, sizeof(struct tracing_enter_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing enter event\n");
@@ -443,7 +466,8 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
     {
         return 0;
     }
-    struct tracing_exit_event *event = reserve_event(sizeof(struct tracing_exit_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct tracing_exit_event *event = reserve_event_on_cpu(cpu, sizeof(struct tracing_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing exit event\n");
@@ -453,7 +477,6 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
     event->pid = pid;
-    event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
     event->ustack = -1;
     submit_event(event);
@@ -470,7 +493,8 @@ int BPF_USDT(past_tracing_exit_stack, u64 span_id)
     {
         return 0;
     }
-    struct tracing_exit_event *event = reserve_event(sizeof(struct tracing_exit_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct tracing_exit_event *event = reserve_event_on_cpu(cpu, sizeof(struct tracing_exit_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing exit event\n");
@@ -480,7 +504,6 @@ int BPF_USDT(past_tracing_exit_stack, u64 span_id)
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
     event->pid = pid;
-    event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
     event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
     submit_event(event);
@@ -497,7 +520,8 @@ int BPF_USDT(past_tracing_close, u64 span_id)
     {
         return 0;
     }
-    struct tracing_close_event *event = reserve_event(sizeof(struct tracing_close_event));
+    int cpu = bpf_get_smp_processor_id();
+    struct tracing_close_event *event = reserve_event_on_cpu(cpu, sizeof(struct tracing_close_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping tracing close event\n");
@@ -507,7 +531,6 @@ int BPF_USDT(past_tracing_close, u64 span_id)
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
     event->pid = pid;
-    event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
     submit_event(event);
     return 0;
@@ -551,7 +574,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
         bpf_printk_debug("throttling rss stat event for tgid %d\n", tgid);
         return 0;
     }
-    
+
     const struct mm_struct *mm = (void *)ctx[0];
     u64 file_pages = 0;
     u64 anon_pages = 0;
@@ -576,8 +599,9 @@ int handle__mm_trace_rss_stat(u64 *ctx)
         shmem_pages = percpu_counter_read_positive(&shmem_fbc);
     }
     u64 rss = file_pages + anon_pages + shmem_pages;
-    
-    struct rss_stat_event *event = reserve_event(sizeof(struct rss_stat_event));
+
+    int cpu = bpf_get_smp_processor_id();
+    struct rss_stat_event *event = reserve_event_on_cpu(cpu, sizeof(struct rss_stat_event));
     if (!event)
     {
         bpf_printk_debug("ringbuf full. dropping rss stat event\n");

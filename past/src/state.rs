@@ -110,7 +110,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         Ok(())
     }
 
-    fn save_event(&mut self, event: Received) -> Result<()> {
+    fn save_event(&mut self, cpu: i32, event: Received) -> Result<()> {
         // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
@@ -126,7 +126,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     ts: (event.end + self.cfg.timestamp_adjustment) as i64,
                     kind: EventKind::Switch,
                     duration: (event.end - event.start) as i64,
-                    cpu: event.cpu_id as i32,
+                    cpu,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
                     command: process_info.command.clone(),
@@ -148,7 +148,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         ts: (event.timestamp + self.cfg.timestamp_adjustment) as i64,
                         duration: self.cfg.perf_event_frequency,
                         kind: EventKind::Profile,
-                        cpu: event.cpu_id as i32,
+                        cpu,
                         tgid: event.tgid as i32,
                         pid: event.pid as i32,
                         command: process_info.command.clone(),
@@ -219,7 +219,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
                     duration: (event.ts - span.last_enter_ts) as i64,
                     kind: EventKind::TraceExit,
-                    cpu: event.cpu_id as i32,
+                    cpu,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
                     command: process_info.command.clone(),
@@ -256,7 +256,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                             ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
                             duration: (event.ts - span.first_enter_ts) as i64,
                             kind: EventKind::TraceClose,
-                            cpu: event.cpu_id as i32,
+                            cpu,
                             tgid: event.tgid as i32,
                             pid: pid as i32,
                             command: process_info.command.clone(),
@@ -286,7 +286,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         Ok(())
     }
 
-    pub(crate) fn on_event(&mut self, event: Received) -> Result<()> {
+    pub(crate) fn on_event(&mut self, cpu: i32, event: Received) -> Result<()> {
         // TODO i need to adjust stats based on response from on_event
         // this is hotfix for ci
         match event {
@@ -338,7 +338,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             }
         }
 
-        if let Err(err) = self.save_event(event) {
+        if let Err(err) = self.save_event(cpu, event) {
             warn!("failed to collect event: {:?}", err);
         }
         if self.group.is_full() {
