@@ -361,7 +361,9 @@ impl StateMachineTest for TestState {
     }
 
     fn apply(mut sut: Self::SystemUnderTest, _ref_state: &RefState, op: Op) -> Self::SystemUnderTest {
-        sut.program.on_event(op.as_slice().into()).expect("collected event");
+        sut.program
+            .on_event(op.as_slice().try_into().expect("correct cast"))
+            .expect("collected event");
         sut
     }
 

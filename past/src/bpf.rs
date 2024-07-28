@@ -9,8 +9,48 @@ use libbpf_rs::{
 
 use crate::{
     perf_event::{attach_perf_event, perf_event_per_cpu},
-    PastSkel, PastSkelBuilder,
+    PastProgs, PastSkel, PastSkelBuilder,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum ProgramName {
+    Profile,
+    Rss,
+    Switch,
+    Exit,
+    Exec,
+    TraceEnter,
+    TraceExit,
+    TraceClose,
+}
+
+impl From<ProgramName> for &'static str {
+    fn from(name: ProgramName) -> &'static str {
+        match name {
+            ProgramName::Profile => "profile",
+            ProgramName::Rss => "rss",
+            ProgramName::Switch => "switch",
+            ProgramName::Exit => "exit",
+            ProgramName::Exec => "exec",
+            ProgramName::TraceEnter => "trace_enter",
+            ProgramName::TraceExit => "trace_exit",
+            ProgramName::TraceClose => "trace_close",
+        }
+    }
+}
+
+pub(crate) fn get_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>) -> &'a libbpf_rs::Program {
+    match name {
+        ProgramName::Profile => progs.handle__perf_event(),
+        ProgramName::Rss => progs.handle__mm_trace_rss_stat(),
+        ProgramName::Switch => progs.handle__sched_switch(),
+        ProgramName::Exit => progs.handle__sched_process_exit(),
+        ProgramName::Exec => progs.handle__sched_process_exec(),
+        ProgramName::TraceEnter => progs.past_tracing_enter(),
+        ProgramName::TraceExit => progs.past_tracing_exit(),
+        ProgramName::TraceClose => progs.past_tracing_close(),
+    }
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum Program {
@@ -319,7 +359,7 @@ fn decode_stack_options_into_bpf_cfg(opts: &Stacks, kstack: &mut MaybeUninit<boo
 
 pub(crate) fn link<'a>(
     programs: &Programs,
-    usdt: impl Iterator<Item = &'a PathBuf>,
+    usdt: &'a [PathBuf],
     debug: bool,
     events_max_entries: u32,
     stacks_max_entries: u32,

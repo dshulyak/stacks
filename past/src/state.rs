@@ -12,6 +12,7 @@ use plain::Plain;
 use tracing::{debug, info, warn};
 
 use crate::{
+    bpf::ProgramName,
     parquet::{Compression, Event, EventKind, Group, GroupWriter},
     past_types,
     symbolizer::{symbolize, Frames, Symbolizer},
@@ -281,9 +282,6 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     self.tgid_span_id_pid_to_enter.remove(&(event.tgid, span_id, pid));
                 }
             }
-            Received::Unknown(event) => {
-                anyhow::bail!("unknown event type: {:?}", event);
-            }
         }
         Ok(())
     }
@@ -321,7 +319,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             Received::ProcessExit(event) => {
                 self.symbolizer_tgid_cleanup.insert(event.tgid);
             }
-            Received::TraceEnter(_) | Received::Unknown(_) => {}
+            Received::TraceEnter(_) => {}
             Received::Profile(event) => {
                 // -1 is set if stack is not collected
                 if event.ustack < -1 {
@@ -447,21 +445,39 @@ pub(crate) enum Received<'a> {
     TraceExit(&'a past_types::tracing_exit_event),
     TraceClose(&'a past_types::tracing_close_event),
     Rss(&'a past_types::rss_stat_event),
-    Unknown(&'a [u8]),
 }
 
-impl<'a> From<&'a [u8]> for Received<'a> {
-    fn from(bytes: &'a [u8]) -> Self {
+impl<'a> Received<'a> {
+    pub(crate) fn program_name(&self) -> ProgramName {
+        // TODO i need to have only one enum
+        match self {
+            Received::Switch(_) => ProgramName::Switch,
+            Received::Profile(_) => ProgramName::Profile,
+            Received::ProcessExec(_) => ProgramName::Exec,
+            Received::ProcessExit(_) => ProgramName::Exit,
+            Received::TraceEnter(_) => ProgramName::TraceEnter,
+            Received::TraceExit(_) => ProgramName::TraceExit,
+            Received::TraceClose(_) => ProgramName::TraceClose,
+            Received::Rss(_) => ProgramName::Rss,
+        }
+    }
+}
+
+impl<'a> TryFrom<&'a [u8]> for Received<'a> {
+    type Error = anyhow::Error;
+
+    fn try_from(bytes: &'a [u8]) -> Result<Self> {
+        anyhow::ensure!(!bytes.is_empty(), "empty event");
         match bytes[0] {
-            0 => Received::Switch(to_event(bytes)),
-            1 => Received::Profile(to_event(bytes)),
-            2 => Received::TraceEnter(to_event(bytes)),
-            3 => Received::TraceExit(to_event(bytes)),
-            4 => Received::TraceClose(to_event(bytes)),
-            5 => Received::ProcessExit(to_event(bytes)),
-            6 => Received::ProcessExec(to_event(bytes)),
-            7 => Received::Rss(to_event(bytes)),
-            _ => Received::Unknown(bytes),
+            0 => Ok(Received::Switch(to_event(bytes))),
+            1 => Ok(Received::Profile(to_event(bytes))),
+            2 => Ok(Received::TraceEnter(to_event(bytes))),
+            3 => Ok(Received::TraceExit(to_event(bytes))),
+            4 => Ok(Received::TraceClose(to_event(bytes))),
+            5 => Ok(Received::ProcessExit(to_event(bytes))),
+            6 => Ok(Received::ProcessExec(to_event(bytes))),
+            7 => Ok(Received::Rss(to_event(bytes))),
+            _ => anyhow::bail!("unknown event type"),
         }
     }
 }
