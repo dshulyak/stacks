@@ -238,7 +238,7 @@ fn main() -> Result<()> {
             comm: proc.comm,
             ..Default::default()
         };
-        program.on_event(Received::ProcessExec(&fake_exec_event))?;
+        program.on_event(0, Received::ProcessExec(&fake_exec_event))?;
     }
 
     let mut dropped_counter = 0;
@@ -274,7 +274,7 @@ fn main() -> Result<()> {
                         comm: comm.comm,
                         ..Default::default()
                     };
-                    program.on_event(Received::ProcessExec(&fake_exec_event))?;
+                    program.on_event(0, Received::ProcessExec(&fake_exec_event))?;
                 }
             }
             Err(err) => {
@@ -306,8 +306,10 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     poll_interval: Duration,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
-    for ringbuf in ringbufs {
-        builder.add(ringbuf, |buf: &[u8]| {
+    let state = &state;
+    let profiler = &profiler;
+    for (cpu, ringbuf) in ringbufs.iter().enumerate() {
+        builder.add(ringbuf, move |buf: &[u8]| {
             let event: Received = match buf.try_into() {
                 Ok(buf) => buf,
                 Err(err) => {
@@ -315,10 +317,10 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
                     return 1;
                 }
             };
-            if let Some(profiler) = &profiler {
+            if let Some(profiler) = profiler {
                 profiler.borrow_mut().collect(event.program_name());
             }
-            if let Err(err) = state.borrow_mut().on_event(event) {
+            if let Err(err) = state.borrow_mut().on_event(cpu as i32, event) {
                 error!("non-recoverable error on event: {:?}", err);
                 1
             } else {
@@ -354,7 +356,7 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             return Err(ErrorConsume::DroppedEvents(delta));
         }
 
-        if let Some(profiler) = &profiler {
+        if let Some(profiler) = profiler {
             if let Err(err) = profiler.borrow_mut().log_stats_on_interval(progs) {
                 warn!("profiler failing to logs: {:?}", err);
             }

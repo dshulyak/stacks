@@ -29,7 +29,6 @@ struct switch_event
     __u64 end;
     __u32 tgid;
     __u32 pid;
-    __u32 cpu_id;
     __s32 ustack;
     __s32 kstack;
 };
@@ -40,7 +39,6 @@ struct perf_cpu_event
     __u64 timestamp;
     __u32 tgid;
     __u32 pid;
-    __u32 cpu_id;
     __s32 ustack;
     __s32 kstack;
 };
@@ -48,15 +46,15 @@ struct perf_cpu_event
 struct process_exit_event
 {
     __u8 type;
-    __u64 timestamp;
     __u32 tgid;
+    __u64 timestamp;
 };
 
 struct process_exec_event
 {
     __u8 type;
-    __u64 timestamp;
     __u32 tgid;
+    __u64 timestamp;
     __u8 comm[TASK_COMM_LEN];
 };
 
@@ -78,7 +76,6 @@ struct tracing_exit_event {
     __u64 ts;
     __u32 tgid;
     __u32 pid;
-    __u32 cpu_id;
     __u64 span_id;
     __s32 ustack;
 };
@@ -88,7 +85,6 @@ struct tracing_close_event {
     __u64 ts;
     __u32 tgid;
     __u32 pid;
-    __u32 cpu_id;
     __u64 span_id;
 };
 
