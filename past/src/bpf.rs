@@ -1,10 +1,16 @@
-use std::{fmt::Display, mem::MaybeUninit, path::PathBuf, str::Split};
+use std::{
+    fmt::Display,
+    mem::{size_of, MaybeUninit},
+    os::fd::{AsFd, AsRawFd},
+    path::PathBuf,
+    str::Split,
+};
 
 use anyhow::{Context, Result};
 use libbpf_rs::{
-    libbpf_sys::{PERF_COUNT_SW_CPU_CLOCK, PERF_TYPE_SOFTWARE},
+    libbpf_sys::{self, PERF_COUNT_SW_CPU_CLOCK, PERF_TYPE_SOFTWARE},
     skel::{OpenSkel, SkelBuilder},
-    Link,
+    Link, MapFlags, MapHandle,
 };
 
 use crate::{
@@ -363,7 +369,7 @@ pub(crate) fn link<'a>(
     debug: bool,
     events_max_entries: u32,
     stacks_max_entries: u32,
-) -> Result<(PastSkel<'a>, Vec<Link>)> {
+) -> Result<(PastSkel<'a>, Vec<MapHandle>, Vec<Link>)> {
     let mut skel = PastSkelBuilder::default().open().context("open skel")?;
     let cfg = &mut skel.rodata_mut().cfg;
     cfg.filter_tgid.write(true);
@@ -396,7 +402,36 @@ pub(crate) fn link<'a>(
         .set_max_entries(stacks_max_entries)
         .context("set stackmap max entries")?;
 
+    let nprocs = libbpf_rs::num_possible_cpus().expect("get number of possible cpus");
+    skel.maps_mut()
+        .events_per_cpu()
+        .set_max_entries(nprocs as u32)
+        .context("set events per cpu max entries")?;
+
     let mut skel = skel.load().context("load skel")?;
+    let opts = libbpf_rs::libbpf_sys::bpf_map_create_opts {
+        sz: size_of::<libbpf_sys::bpf_map_create_opts>() as libbpf_sys::size_t,
+        ..Default::default()
+    };
+    let mut ringbufs = vec![];
+    for cpu in 0..nprocs as u32 {
+        let inner_events = MapHandle::create(
+            libbpf_rs::MapType::RingBuf,
+            Some("inner_events"),
+            0,
+            0,
+            events_max_entries,
+            &opts,
+        )
+        .context("create inner events")?;
+        let fd = inner_events.as_fd().as_raw_fd();
+        skel.maps_mut()
+            .events_per_cpu()
+            .update(&cpu.to_ne_bytes(), &fd.to_ne_bytes(), MapFlags::ANY)
+            .context("update events per cpu to inner events")?;
+        ringbufs.push(inner_events);
+    }
+
     let mut links = vec![];
 
     if let Some(profile) = &programs.profile {
@@ -460,5 +495,5 @@ pub(crate) fn link<'a>(
         links.push(_usdt_close);
     }
 
-    Ok((skel, links))
+    Ok((skel, ringbufs, links))
 }

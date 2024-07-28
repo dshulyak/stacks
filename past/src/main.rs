@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use std::{
     cell::RefCell,
     collections::HashSet,
@@ -15,7 +17,7 @@ use anyhow::{Context, Result};
 use bpf::{link, Program, Programs};
 use bpf_profile::Profiler;
 use clap::Parser;
-use libbpf_rs::{MapFlags, RingBufferBuilder};
+use libbpf_rs::{MapFlags, MapHandle, RingBufferBuilder};
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
@@ -191,7 +193,7 @@ fn main() -> Result<()> {
         .context("current unix time")?;
     let adjustment = (current_unix - uptime).as_nanos() as u64;
 
-    let (mut skel, _links) = link(
+    let (mut skel, ringbufs, _links) = link(
         &programs,
         opt.usdt.as_slice(),
         opt.debug_bpf,
@@ -249,8 +251,9 @@ fn main() -> Result<()> {
     };
     loop {
         match consume_events(
-            &mut program,
+            RefCell::new(&mut program),
             &maps,
+            ringbufs.as_slice(),
             profiler.as_mut(),
             &progs,
             &mut dropped_counter,
@@ -293,8 +296,9 @@ enum ErrorConsume {
 }
 
 fn consume_events<Fr: Frames, Sym: Symbolizer>(
-    state: &mut state::State<Fr, Sym>,
+    state: RefCell<&mut state::State<Fr, Sym>>,
     maps: &PastMaps,
+    ringbufs: &[MapHandle],
     profiler: Option<&mut RefCell<Profiler>>,
     progs: &PastProgs,
     dropped_counter: &mut u64,
@@ -302,24 +306,27 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     poll_interval: Duration,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
-    builder.add(maps.events(), |buf: &[u8]| {
-        let event: Received = match buf.try_into() {
-            Ok(buf) => buf,
-            Err(err) => {
-                error!("invalid event: {:?}", err);
-                return 1;
+    for ringbuf in ringbufs {
+        builder.add(ringbuf, |buf: &[u8]| {
+            let event: Received = match buf.try_into() {
+                Ok(buf) => buf,
+                Err(err) => {
+                    error!("invalid event: {:?}", err);
+                    return 1;
+                }
+            };
+            if let Some(profiler) = &profiler {
+                profiler.borrow_mut().collect(event.program_name());
             }
-        };
-        if let Some(profiler) = &profiler {
-            profiler.borrow_mut().collect(event.program_name());
-        }
-        if let Err(err) = state.on_event(event) {
-            error!("non-recoverable error on event: {:?}", err);
-            1
-        } else {
-            0
-        }
-    })?;
+            if let Err(err) = state.borrow_mut().on_event(event) {
+                error!("non-recoverable error on event: {:?}", err);
+                1
+            } else {
+                0
+            }
+        })?;
+    }
+
     let mgr = builder.build().unwrap();
     let consume = info_span!("consume");
 
