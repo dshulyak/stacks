@@ -338,6 +338,11 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             }
         });
         if !interrupt.load(Ordering::Relaxed) {
+            if let Some(profiler) = &profiler {
+                if let Err(err) = profiler.borrow_mut().log_stats(progs) {
+                    warn!("profiler failing to logs: {:?}", err);
+                }
+            }
             return Ok(());
         }
         let updated_dropped_counter = count_dropped_events(maps.errors_counter())?;
@@ -346,7 +351,6 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             *dropped_counter = updated_dropped_counter;
             return Err(ErrorConsume::DroppedEvents(delta));
         }
-
         if let Some(profiler) = &profiler {
             if let Err(err) = profiler.borrow_mut().log_stats_on_interval(progs) {
                 warn!("profiler failing to logs: {:?}", err);

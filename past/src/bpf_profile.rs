@@ -138,11 +138,8 @@ impl Profiler {
         *counter += 1;
     }
 
-    pub(crate) fn log_stats_on_interval(&mut self, progs: &PastProgs) -> Result<()> {
+    pub(crate) fn log_stats(&mut self, progs: &PastProgs) -> Result<()> {
         let ts: time::Instant = time::Instant::now();
-        if ts.duration_since(self.last) < self.interval {
-            return Ok(());
-        }
         for (name, collected_cnt) in self.events_per_program_counter.iter() {
             let (runtime_ns, runtime_cnt) = self.fd.get_stats(get_program(*name, progs))?;
             let previous = self.stats.entry(*name).or_insert(ProgramStats {
@@ -171,5 +168,13 @@ impl Profiler {
             self.scratch.clear();
         }
         Ok(())
+    }
+
+    pub(crate) fn log_stats_on_interval(&mut self, progs: &PastProgs) -> Result<()> {
+        let ts: time::Instant = time::Instant::now();
+        if ts.duration_since(self.last) < self.interval {
+            return Ok(());
+        }
+        self.log_stats(progs)
     }
 }
