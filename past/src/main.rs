@@ -95,7 +95,10 @@ examples:
 - block:uk
     collect kernel and user stacks on block io event.
     this program is not enabled by default as it requires tracepoints that were added
-    only in more recent kernel (TODO check which versions exactly).    
+    only in more recent kernel (TODO check which versions exactly).
+- vfs:uk
+    collect kernel and user stacks on vfs read and writes, including vectorized versions.
+    this program is not enabled by default as it requires fentry/fexit support in the kernel (TODO check version)    
 "#,
     )]
     programs: Vec<String>,

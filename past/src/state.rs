@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 use crate::{
     bpf::ProgramName,
     parquet::{Compression, Event, EventKind, Group, GroupWriter},
-    past_types::{self, blk_io_event},
+    past_types::{self, blk_io_event, vfs_io_event},
     symbolizer::{symbolize, Frames, Symbolizer},
 };
 
@@ -316,6 +316,38 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     ..Default::default()
                 });
             }
+            Received::Vfs(event) => {
+                let vfs_io_event {
+                    r#type: _,
+                    rw,
+                    tgid,
+                    ts,
+                    size,
+                    ustack,
+                    kstack,
+                } = event;
+                let process_info = match self.tgid_process_info.get(tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", tgid);
+                    }
+                };
+                self.group.save_event(Event {
+                    ts: (*ts + self.cfg.timestamp_adjustment) as i64,
+                    kind: if *rw == 0 {
+                        EventKind::VfsRead
+                    } else {
+                        EventKind::VfsWrite
+                    },
+                    tgid: *tgid as i32,
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
+                    amount: *size as i64,
+                    ustack: *ustack,
+                    kstack: *kstack,
+                    ..Default::default()
+                });
+            }
         }
         Ok(())
     }
@@ -366,7 +398,8 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
-            Received::Block(_)
+            Received::Vfs(_)
+            | Received::Block(_)
             | Received::Switch(_)
             | Received::Rss(_)
             | Received::TraceExit(_)
@@ -464,6 +497,7 @@ unsafe impl Plain for past_types::process_exit_event {}
 unsafe impl Plain for past_types::process_exec_event {}
 unsafe impl Plain for past_types::rss_stat_event {}
 unsafe impl Plain for past_types::blk_io_event {}
+unsafe impl Plain for past_types::vfs_io_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -485,6 +519,7 @@ pub(crate) enum Received<'a> {
     TraceClose(&'a past_types::tracing_close_event),
     Rss(&'a past_types::rss_stat_event),
     Block(&'a past_types::blk_io_event),
+    Vfs(&'a past_types::vfs_io_event),
 }
 
 impl<'a> Received<'a> {
@@ -500,6 +535,7 @@ impl<'a> Received<'a> {
             Received::TraceClose(_) => ProgramName::TraceClose,
             Received::Rss(_) => ProgramName::Rss,
             Received::Block(_) => ProgramName::Block,
+            Received::Vfs(_) => ProgramName::Vfs,
         }
     }
 }
@@ -519,6 +555,7 @@ impl<'a> TryFrom<&'a [u8]> for Received<'a> {
             6 => Ok(Received::ProcessExec(to_event(bytes))),
             7 => Ok(Received::Rss(to_event(bytes))),
             8 => Ok(Received::Block(to_event(bytes))),
+            9 => Ok(Received::Vfs(to_event(bytes))),
             _ => anyhow::bail!("unknown event type"),
         }
     }

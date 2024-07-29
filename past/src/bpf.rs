@@ -23,6 +23,7 @@ pub(crate) enum ProgramName {
     TraceExit,
     TraceClose,
     Block,
+    Vfs,
 }
 
 impl From<ProgramName> for &'static str {
@@ -37,6 +38,7 @@ impl From<ProgramName> for &'static str {
             ProgramName::TraceExit => "trace_exit",
             ProgramName::TraceClose => "trace_close",
             ProgramName::Block => "block",
+            ProgramName::Vfs => "vfs",
         }
     }
 }
@@ -47,6 +49,7 @@ pub(crate) enum Program {
     Rss(Rss),
     Switch(Switch),
     Block(Block),
+    Vfs(Vfs),
 }
 
 impl Display for Program {
@@ -56,6 +59,7 @@ impl Display for Program {
             Program::Rss(rss) => write!(f, "{}", rss),
             Program::Switch(switch) => write!(f, "{}", switch),
             Program::Block(block) => write!(f, "{}", block),
+            Program::Vfs(vfs) => write!(f, "{}", vfs),
         }
     }
 }
@@ -70,6 +74,7 @@ impl TryFrom<&str> for Program {
             Some("rss") => Ok(Program::Rss(parts.try_into()?)),
             Some("switch") => Ok(Program::Switch(parts.try_into()?)),
             Some("block") => Ok(Program::Block(parts.try_into()?)),
+            Some("vfs") => Ok(Program::Vfs(parts.try_into()?)),
             Some(program) => anyhow::bail!("invalid program {}", program),
             None => anyhow::bail!("empty program"),
         }
@@ -82,22 +87,34 @@ pub(crate) struct Programs {
     rss: Option<Rss>,
     switch: Option<Switch>,
     block: Option<Block>,
+    vfs: Option<Vfs>,
 }
 
 impl Display for Programs {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Programs {
+            profile,
+            rss,
+            switch,
+            block,
+            vfs,
+        } = self;
+
         let mut programs = vec![];
-        if let Some(profile) = &self.profile {
+        if let Some(profile) = profile {
             programs.push(format!("{}", profile));
         }
-        if let Some(rss) = &self.rss {
+        if let Some(rss) = rss {
             programs.push(format!("{}", rss));
         }
-        if let Some(switch) = &self.switch {
+        if let Some(switch) = switch {
             programs.push(format!("{}", switch));
         }
-        if let Some(block) = &self.block {
+        if let Some(block) = block {
             programs.push(format!("{}", block));
+        }
+        if let Some(vfs) = vfs {
+            programs.push(format!("{}", vfs));
         }
         write!(f, "{}", programs.join(", "))
     }
@@ -110,6 +127,7 @@ impl Programs {
             rss: None,
             switch: None,
             block: None,
+            vfs: None,
         }
     }
 
@@ -145,6 +163,12 @@ impl Programs {
                         anyhow::bail!("duplicate block. {} and {}", programs.block.unwrap(), block);
                     }
                     programs.block = Some(block);
+                }
+                Program::Vfs(vfs) => {
+                    if programs.vfs.is_some() {
+                        anyhow::bail!("duplicate vfs. {} and {}", programs.vfs.unwrap(), vfs);
+                    }
+                    programs.vfs = Some(vfs);
                 }
             }
         }
@@ -284,6 +308,41 @@ impl<'a> TryFrom<Split<'a, char>> for Block {
             }
         }
         Ok(block)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Vfs {
+    stacks: Stacks,
+}
+
+impl Default for Vfs {
+    fn default() -> Self {
+        Vfs { stacks: Stacks::N }
+    }
+}
+
+impl Display for Vfs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "vfs:{}", self.stacks)
+    }
+}
+
+impl<'a> TryFrom<Split<'a, char>> for Vfs {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Split<char>) -> Result<Self> {
+        let mut vfs = Vfs::default();
+        for item in value {
+            let maybe_stacks: Result<Stacks> = item.try_into();
+            match maybe_stacks {
+                Ok(stacks) => {
+                    vfs.stacks = stacks;
+                }
+                Err(_) => anyhow::bail!("invalid configuration item for vfs {}", item),
+            }
+        }
+        Ok(vfs)
     }
 }
 
@@ -475,6 +534,13 @@ pub(crate) fn link<'a>(
                 .context("attach block io end")?,
         );
     }
+    if programs.vfs.is_some() {
+        links.push(skel.progs_mut().vfs_read().attach().context("attach vfs read")?);
+        links.push(skel.progs_mut().vfs_write().attach().context("attach vfs write")?);
+        links.push(skel.progs_mut().vfs_readv().attach().context("attach vfs readv")?);
+        links.push(skel.progs_mut().vfs_writev().attach().context("attach vfs writev")?);
+    }
+
     links.push(
         skel.progs_mut()
             .handle__sched_process_exit()
