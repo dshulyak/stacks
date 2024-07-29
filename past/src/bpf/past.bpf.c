@@ -29,6 +29,8 @@ const volatile struct
     bool rss_kstack;
     bool blk_ustack;
     bool blk_kstack;
+    bool vfs_ustack;
+    bool vfs_kstack;
     __u64 wakeup_bytes;
     __u16 rss_stat_throttle;
     __u64 minimal_switch_duration;
@@ -44,6 +46,8 @@ const volatile struct
     .rss_kstack = false,
     .blk_ustack = false,
     .blk_kstack = false,
+    .vfs_ustack = false,
+    .vfs_kstack = false,
     .wakeup_bytes = 10 << 10,
     .rss_stat_throttle = 0,
     .minimal_switch_duration = 0,
@@ -691,6 +695,68 @@ int BPF_PROG(block_io_done, struct request *rq)
     return 0;
 }
 
+__always_inline int on_vfs_event(u64 *ctx, __u8 rw) {
+    u64 __pid_tgid = bpf_get_current_pid_tgid();
+    gid_t tgid = __pid_tgid >> 32;
+    if (apply_tgid_filter(tgid) > 0)
+    {
+        return 0;
+    }
+    struct vfs_io_event *event = reserve_event(sizeof(struct vfs_io_event));
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping vfs read event\n");
+        return 0;
+    }
+    event->type = TYPE_VFS_IO_EVENT;
+    event->ts = bpf_ktime_get_ns();
+    event->tgid = tgid;
+    event->size = (__u64)ctx[2];
+    event->rw = rw;
+    if (cfg.vfs_ustack)
+    {
+        event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->ustack = -1;
+    }
+    if (cfg.vfs_kstack)
+    {
+        event->kstack = bpf_get_stackid(ctx, &stackmap, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->kstack = -1;
+    }
+    submit_event(event);
+	return 0;
+}
+
+SEC("fentry/vfs_read")
+int vfs_read(u64 *ctx)
+{
+	return on_vfs_event(ctx, 0);
+}
+
+SEC("fentry/vfs_readv")
+int vfs_readv(u64 *ctx)
+{
+	return on_vfs_event(ctx, 0);
+}
+
+SEC("fentry/vfs_write")
+int vfs_write(u64 *ctx)
+{
+	return on_vfs_event(ctx, 1);
+}
+
+SEC("fentry/vfs_writev")
+int vfs_writev(u64 *ctx)
+{
+	return on_vfs_event(ctx, 1);
+}
+
 // cargo libbpf doesn't generate bindings without definitions
 
 struct switch_event _switch_event = {0};
@@ -702,5 +768,6 @@ struct process_exit_event _process_exit_event = {0};
 struct process_exec_event _process_exec_event = {0};
 struct rss_stat_event _rss_stat_event = {0};
 struct blk_io_event _blk_io_event = {0};
+struct vfs_io_event _vfs_io_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

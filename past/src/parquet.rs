@@ -23,6 +23,8 @@ pub(crate) enum EventKind {
     TraceClose,
     BlockRead,
     BlockWrite,
+    VfsRead,
+    VfsWrite,
 }
 
 impl From<EventKind> for &'static [u8] {
@@ -35,6 +37,8 @@ impl From<EventKind> for &'static [u8] {
             EventKind::TraceClose => b"trace_close",
             EventKind::BlockRead => b"blk_read",
             EventKind::BlockWrite => b"blk_write",
+            EventKind::VfsRead => b"vfs_read",
+            EventKind::VfsWrite => b"vfs_write",
         }
     }
 }

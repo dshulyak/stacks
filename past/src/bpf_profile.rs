@@ -191,5 +191,15 @@ fn collect_stats_for_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>, fd
             let (done_ns, done_cnt) = fd.get_stats(progs.block_io_done())?;
             Ok((start_ns + done_ns, start_cnt + done_cnt))
         }
+        ProgramName::Vfs => {
+            let (read_ns, read_cnt) = fd.get_stats(progs.vfs_read())?;
+            let (readv_ns, readv_cnt) = fd.get_stats(progs.vfs_readv())?;
+            let (write_ns, write_cnt) = fd.get_stats(progs.vfs_write())?;
+            let (writev_ns, writev_cnt) = fd.get_stats(progs.vfs_writev())?;
+            Ok((
+                read_ns + readv_ns + write_ns + writev_ns,
+                read_cnt + readv_cnt + write_cnt + writev_cnt,
+            ))
+        }
     }
 }

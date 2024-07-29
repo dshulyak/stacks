@@ -20,6 +20,7 @@
 #define TYPE_PROCESS_EXEC_EVENT 6
 #define TYPE_RSS_STAT_EVENT 7
 #define TYPE_BLK_IO_EVENT 8
+#define TYPE_VFS_IO_EVENT 9
 
 enum errors {
     DROPPED_EVENTS
@@ -115,5 +116,16 @@ struct blk_io_event {
     __s32 ustack;
     __s32 kstack;
 };
+
+struct vfs_io_event {
+    __u8 type;
+    __u8 rw;
+    __u32 tgid;
+    __u64 ts;
+    __u64 size;
+    __s32 ustack;
+    __s32 kstack;
+};
+
 
 #endif
