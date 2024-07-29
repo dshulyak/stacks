@@ -16,10 +16,7 @@ use libbpf_rs::{
 };
 use tracing::info;
 
-use crate::{
-    bpf::{get_program, ProgramName},
-    PastProgs,
-};
+use crate::{bpf::ProgramName, PastProgs};
 
 fn enable() -> Result<StatsFd> {
     let fd = unsafe { bpf_enable_stats(BPF_STATS_RUN_TIME) };
@@ -141,7 +138,7 @@ impl Profiler {
     pub(crate) fn log_stats(&mut self, progs: &PastProgs) -> Result<()> {
         let ts: time::Instant = time::Instant::now();
         for (name, collected_cnt) in self.events_per_program_counter.iter() {
-            let (runtime_ns, runtime_cnt) = self.fd.get_stats(get_program(*name, progs))?;
+            let (runtime_ns, runtime_cnt) = collect_stats_for_program(*name, progs, &self.fd)?;
             let previous = self.stats.entry(*name).or_insert(ProgramStats {
                 runtime_ns: 0,
                 runtime_cnt: 0,
@@ -176,5 +173,23 @@ impl Profiler {
             return Ok(());
         }
         self.log_stats(progs)
+    }
+}
+
+fn collect_stats_for_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>, fd: &StatsFd) -> Result<(u64, u64)> {
+    match name {
+        ProgramName::Profile => fd.get_stats(progs.handle__perf_event()),
+        ProgramName::Rss => fd.get_stats(progs.handle__mm_trace_rss_stat()),
+        ProgramName::Switch => fd.get_stats(progs.handle__sched_switch()),
+        ProgramName::Exit => fd.get_stats(progs.handle__sched_process_exit()),
+        ProgramName::Exec => fd.get_stats(progs.handle__sched_process_exec()),
+        ProgramName::TraceEnter => fd.get_stats(progs.past_tracing_enter()),
+        ProgramName::TraceExit => fd.get_stats(progs.past_tracing_exit()),
+        ProgramName::TraceClose => fd.get_stats(progs.past_tracing_close()),
+        ProgramName::Block => {
+            let (start_ns, start_cnt) = fd.get_stats(progs.block_io_start())?;
+            let (done_ns, done_cnt) = fd.get_stats(progs.block_io_done())?;
+            Ok((start_ns + done_ns, start_cnt + done_cnt))
+        }
     }
 }
