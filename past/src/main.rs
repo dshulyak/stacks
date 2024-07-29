@@ -92,6 +92,10 @@ examples:
     bpf collector will drop all spans that are shorter than 1us.
 - switch:n
     do not collect stacks on context switch event.
+- block:uk
+    collect kernel and user stacks on block io event.
+    this program is not enabled by default as it requires tracepoints that were added
+    only in more recent kernel (TODO check which versions exactly).    
 "#,
     )]
     programs: Vec<String>,

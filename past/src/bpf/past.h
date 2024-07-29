@@ -9,6 +9,8 @@
 #define TASK_COMM_LEN 16
 #endif
 
+#define REQ_OP_MASK ((1 << 8) - 1)
+
 #define TYPE_SWITCH_EVENT 0
 #define TYPE_PERF_CPU_EVENT 1
 #define TYPE_TRACING_ENTER_EVENT 2
@@ -17,6 +19,7 @@
 #define TYPE_PROCESS_EXIT_EVENT 5
 #define TYPE_PROCESS_EXEC_EVENT 6
 #define TYPE_RSS_STAT_EVENT 7
+#define TYPE_BLK_IO_EVENT 8
 
 enum errors {
     DROPPED_EVENTS
@@ -97,6 +100,18 @@ struct rss_stat_event {
     __u32 tgid;
     __u64 ts;
     __u64 rss;
+    __s32 ustack;
+    __s32 kstack;
+};
+
+
+struct blk_io_event {
+    __u8 type;
+    __u8 rw;
+    __u32 tgid;
+    __u64 start;
+    __u64 end;
+    __u64 size;
     __s32 ustack;
     __s32 kstack;
 };

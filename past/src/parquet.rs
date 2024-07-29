@@ -21,6 +21,8 @@ pub(crate) enum EventKind {
     Rss,
     TraceExit,
     TraceClose,
+    BlockRead,
+    BlockWrite,
 }
 
 impl From<EventKind> for &'static [u8] {
@@ -31,6 +33,8 @@ impl From<EventKind> for &'static [u8] {
             EventKind::Rss => b"rss",
             EventKind::TraceExit => b"trace_exit",
             EventKind::TraceClose => b"trace_close",
+            EventKind::BlockRead => b"blk_read",
+            EventKind::BlockWrite => b"blk_write",
         }
     }
 }

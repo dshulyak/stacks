@@ -27,6 +27,8 @@ const volatile struct
     bool perf_kstack;
     bool rss_ustack;
     bool rss_kstack;
+    bool blk_ustack;
+    bool blk_kstack;
     __u64 wakeup_bytes;
     __u16 rss_stat_throttle;
     __u64 minimal_switch_duration;
@@ -40,6 +42,8 @@ const volatile struct
     .perf_kstack = false,
     .rss_ustack = true,
     .rss_kstack = false,
+    .blk_ustack = false,
+    .blk_kstack = false,
     .wakeup_bytes = 10 << 10,
     .rss_stat_throttle = 0,
     .minimal_switch_duration = 0,
@@ -92,12 +96,12 @@ static __always_inline void *reserve_event(__u64 size)
 }
 
 static __always_inline void submit_event(void *event)
-{   
+{
     __u64 available = bpf_ringbuf_query(&events, BPF_RB_AVAIL_DATA);
     if (available > cfg.wakeup_bytes)
     {
         return bpf_ringbuf_submit(event, BPF_RB_FORCE_WAKEUP);
-    } 
+    }
     return bpf_ringbuf_submit(event, BPF_RB_NO_WAKEUP);
 }
 
@@ -241,6 +245,23 @@ __always_inline int apply_filters(struct task_struct *task)
     return 1;
 }
 
+struct recorded_blk_io_start
+{
+    __u64 ts;
+    __u32 tgid;
+    __u64 size;
+    __s32 kstack;
+    __s32 ustack;
+};
+
+struct
+{
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 8192);
+    __type(key, struct request *);
+    __type(value, struct recorded_blk_io_start);
+} blk_io_starts SEC(".maps");
+
 // HANDLERS
 
 SEC("tp_btf/sched_switch")
@@ -270,7 +291,7 @@ int handle__sched_switch(u64 *ctx)
     u64 delta = end - start;
     if (delta < cfg.minimal_switch_duration)
     {
-        bpf_printk_debug("duration (%d) is less than minimal (%d)\n", delta, cfg.minimal_switch_duration);  
+        bpf_printk_debug("duration (%d) is less than minimal (%d)\n", delta, cfg.minimal_switch_duration);
         return 0;
     }
     struct switch_event *event = reserve_event(sizeof(struct switch_event));
@@ -551,7 +572,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
         bpf_printk_debug("throttling rss stat event for tgid %d\n", tgid);
         return 0;
     }
-    
+
     const struct mm_struct *mm = (void *)ctx[0];
     u64 file_pages = 0;
     u64 anon_pages = 0;
@@ -576,7 +597,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
         shmem_pages = percpu_counter_read_positive(&shmem_fbc);
     }
     u64 rss = file_pages + anon_pages + shmem_pages;
-    
+
     struct rss_stat_event *event = reserve_event(sizeof(struct rss_stat_event));
     if (!event)
     {
@@ -607,6 +628,69 @@ int handle__mm_trace_rss_stat(u64 *ctx)
     return 0;
 }
 
+SEC("tp_btf/block_io_start")
+int BPF_PROG(block_io_start, struct request *rq)
+{
+    u64 __pid_tgid = bpf_get_current_pid_tgid();
+    gid_t tgid = __pid_tgid >> 32;
+    
+    if (apply_tgid_filter(tgid) > 0)
+    {
+        return 0;
+    }
+    struct recorded_blk_io_start recorded = {
+        .ts = bpf_ktime_get_ns(),
+        .tgid = tgid,
+        .size = BPF_CORE_READ(rq, __data_len),
+    };
+    if (cfg.blk_ustack)
+    {
+        recorded.ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        recorded.ustack = -1;
+    }
+    if (cfg.blk_kstack)
+    {
+        recorded.kstack = bpf_get_stackid(ctx, &stackmap, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        recorded.kstack = -1;
+    }
+    bpf_map_update_elem(&blk_io_starts, &rq, &recorded, BPF_ANY);
+    return 0;
+}
+
+SEC("tp_btf/block_io_done")
+int BPF_PROG(block_io_done, struct request *rq)
+{
+    struct recorded_blk_io_start *recorded = bpf_map_lookup_elem(&blk_io_starts, &rq);
+    if (!recorded)
+    {
+        return 0;
+    }
+    bpf_map_delete_elem(&blk_io_starts, &rq);
+
+    struct blk_io_event *event = reserve_event(sizeof(struct blk_io_event));
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping block io event\n");
+        return 0;
+    }
+    event->type = TYPE_BLK_IO_EVENT;
+    event->rw = (BPF_CORE_READ(rq, cmd_flags) & REQ_OP_MASK) == REQ_OP_WRITE;
+    event->tgid = recorded->tgid;
+    event->start = recorded->ts;
+    event->end = bpf_ktime_get_ns();
+    event->size = recorded->size;
+    event->ustack = recorded->ustack;
+    event->kstack = recorded->kstack;
+    submit_event(event);
+    return 0;
+}
+
 // cargo libbpf doesn't generate bindings without definitions
 
 struct switch_event _switch_event = {0};
@@ -617,5 +701,6 @@ struct tracing_close_event _tracing_close_event = {0};
 struct process_exit_event _process_exit_event = {0};
 struct process_exec_event _process_exec_event = {0};
 struct rss_stat_event _rss_stat_event = {0};
+struct blk_io_event _blk_io_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";

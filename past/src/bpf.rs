@@ -9,7 +9,7 @@ use libbpf_rs::{
 
 use crate::{
     perf_event::{attach_perf_event, perf_event_per_cpu},
-    PastProgs, PastSkel, PastSkelBuilder,
+    PastSkel, PastSkelBuilder,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -22,6 +22,7 @@ pub(crate) enum ProgramName {
     TraceEnter,
     TraceExit,
     TraceClose,
+    Block,
 }
 
 impl From<ProgramName> for &'static str {
@@ -35,20 +36,8 @@ impl From<ProgramName> for &'static str {
             ProgramName::TraceEnter => "trace_enter",
             ProgramName::TraceExit => "trace_exit",
             ProgramName::TraceClose => "trace_close",
+            ProgramName::Block => "block",
         }
-    }
-}
-
-pub(crate) fn get_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>) -> &'a libbpf_rs::Program {
-    match name {
-        ProgramName::Profile => progs.handle__perf_event(),
-        ProgramName::Rss => progs.handle__mm_trace_rss_stat(),
-        ProgramName::Switch => progs.handle__sched_switch(),
-        ProgramName::Exit => progs.handle__sched_process_exit(),
-        ProgramName::Exec => progs.handle__sched_process_exec(),
-        ProgramName::TraceEnter => progs.past_tracing_enter(),
-        ProgramName::TraceExit => progs.past_tracing_exit(),
-        ProgramName::TraceClose => progs.past_tracing_close(),
     }
 }
 
@@ -57,6 +46,7 @@ pub(crate) enum Program {
     Profile(Profile),
     Rss(Rss),
     Switch(Switch),
+    Block(Block),
 }
 
 impl Display for Program {
@@ -65,6 +55,7 @@ impl Display for Program {
             Program::Profile(profile) => write!(f, "{}", profile),
             Program::Rss(rss) => write!(f, "{}", rss),
             Program::Switch(switch) => write!(f, "{}", switch),
+            Program::Block(block) => write!(f, "{}", block),
         }
     }
 }
@@ -78,6 +69,7 @@ impl TryFrom<&str> for Program {
             Some("profile") => Ok(Program::Profile(parts.try_into()?)),
             Some("rss") => Ok(Program::Rss(parts.try_into()?)),
             Some("switch") => Ok(Program::Switch(parts.try_into()?)),
+            Some("block") => Ok(Program::Block(parts.try_into()?)),
             Some(program) => anyhow::bail!("invalid program {}", program),
             None => anyhow::bail!("empty program"),
         }
@@ -89,6 +81,7 @@ pub(crate) struct Programs {
     profile: Option<Profile>,
     rss: Option<Rss>,
     switch: Option<Switch>,
+    block: Option<Block>,
 }
 
 impl Display for Programs {
@@ -103,6 +96,9 @@ impl Display for Programs {
         if let Some(switch) = &self.switch {
             programs.push(format!("{}", switch));
         }
+        if let Some(block) = &self.block {
+            programs.push(format!("{}", block));
+        }
         write!(f, "{}", programs.join(", "))
     }
 }
@@ -113,6 +109,7 @@ impl Programs {
             profile: None,
             rss: None,
             switch: None,
+            block: None,
         }
     }
 
@@ -142,6 +139,12 @@ impl Programs {
                         anyhow::bail!("duplicate switch. {} and {}", programs.switch.unwrap(), switch);
                     }
                     programs.switch = Some(switch);
+                }
+                Program::Block(block) => {
+                    if programs.block.is_some() {
+                        anyhow::bail!("duplicate block. {} and {}", programs.block.unwrap(), block);
+                    }
+                    programs.block = Some(block);
                 }
             }
         }
@@ -246,6 +249,41 @@ impl Default for Profile {
             stacks: Stacks::U,
             frequency: 99,
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct Block {
+    stacks: Stacks,
+}
+
+impl Default for Block {
+    fn default() -> Self {
+        Block { stacks: Stacks::N }
+    }
+}
+
+impl Display for Block {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "block:{}", self.stacks)
+    }
+}
+
+impl<'a> TryFrom<Split<'a, char>> for Block {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Split<char>) -> Result<Self> {
+        let mut block = Block::default();
+        for item in value {
+            let maybe_stacks: Result<Stacks> = item.try_into();
+            match maybe_stacks {
+                Ok(stacks) => {
+                    block.stacks = stacks;
+                }
+                Err(_) => anyhow::bail!("invalid configuration item for block {}", item),
+            }
+        }
+        Ok(block)
     }
 }
 
@@ -386,6 +424,9 @@ pub(crate) fn link<'a>(
         decode_stack_options_into_bpf_cfg(stacks, &mut cfg.switch_kstack, &mut cfg.switch_ustack);
         cfg.minimal_switch_duration = *minimal_span_duration;
     }
+    if let Some(Block { stacks }) = &programs.block {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.blk_kstack, &mut cfg.blk_ustack);
+    }
     skel.maps_mut()
         .events()
         .set_max_entries(events_max_entries)
@@ -418,6 +459,20 @@ pub(crate) fn link<'a>(
                 .handle__sched_switch()
                 .attach()
                 .context("attach sched_switch")?,
+        );
+    }
+    if programs.block.is_some() {
+        links.push(
+            skel.progs_mut()
+                .block_io_start()
+                .attach()
+                .context("attach block io start")?,
+        );
+        links.push(
+            skel.progs_mut()
+                .block_io_done()
+                .attach()
+                .context("attach block io end")?,
         );
     }
     links.push(
