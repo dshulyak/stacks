@@ -98,7 +98,10 @@ examples:
     only in more recent kernel (TODO check which versions exactly).
 - vfs:uk
     collect kernel and user stacks on vfs read and writes, including vectorized versions.
-    this program is not enabled by default as it requires fentry/fexit support in the kernel (TODO check version)    
+    this program is not enabled by default as it requires fentry/fexit support in the kernel (TODO check version)
+- net:uk
+    collect kernel and user stack on udp/tcp send/recv events.
+    this set of programs require fentry/fexit support.
 "#,
     )]
     programs: Vec<String>,
