@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 use crate::{
     bpf::ProgramName,
     parquet::{Compression, Event, EventKind, Group, GroupWriter},
-    past_types::{self, blk_io_event, vfs_io_event},
+    past_types::{self, blk_io_event, net_io_event, vfs_io_event},
     symbolizer::{symbolize, Frames, Symbolizer},
 };
 
@@ -110,11 +110,11 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         Ok(())
     }
 
-    fn save_event(&mut self, event: Received) -> Result<()> {
+    fn save_event(&mut self, received: Received) -> Result<()> {
         // all integers are cast to signed because of the API provided by rust parquet lib
         // arithmetic operations will be correctly performed on unsigned integers, configured in schema
         // TODO maybe i should move cast closer to the schema definition
-        match event {
+        match received {
             Received::Switch(event) => {
                 let process_info = match self.tgid_process_info.get(&event.tgid) {
                     Some(command) => command,
@@ -124,7 +124,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
                 self.group.save_event(Event {
                     ts: (event.end + self.cfg.timestamp_adjustment) as i64,
-                    kind: EventKind::Switch,
+                    kind: received.try_into()?,
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
@@ -168,7 +168,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
                 self.group.save_event(Event {
                     ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
-                    kind: EventKind::Rss,
+                    kind: received.try_into()?,
                     tgid: event.tgid as i32,
                     command: process_info.command.clone(),
                     buildid: process_info.buildid.clone(),
@@ -218,7 +218,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.group.save_event(Event {
                     ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
                     duration: (event.ts - span.last_enter_ts) as i64,
-                    kind: EventKind::TraceExit,
+                    kind: received.try_into()?,
                     cpu: event.cpu_id as i32,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
@@ -283,9 +283,11 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 }
             }
             Received::Block(event) => {
+                // TODO rw needs to be refactored away, it is nicer to define
+                // separate type for event
                 let blk_io_event {
                     r#type: _,
-                    rw,
+                    rw: _,
                     tgid,
                     start,
                     end,
@@ -302,11 +304,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.group.save_event(Event {
                     ts: (end + self.cfg.timestamp_adjustment) as i64,
                     duration: (end - start) as i64,
-                    kind: if *rw == 0 {
-                        EventKind::BlockRead
-                    } else {
-                        EventKind::BlockWrite
-                    },
+                    kind: received.try_into()?,
                     tgid: *tgid as i32,
                     command: process_info.command.clone(),
                     buildid: process_info.buildid.clone(),
@@ -319,7 +317,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             Received::Vfs(event) => {
                 let vfs_io_event {
                     r#type: _,
-                    rw,
+                    rw: _,
                     tgid,
                     ts,
                     size,
@@ -334,11 +332,37 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
                 self.group.save_event(Event {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
-                    kind: if *rw == 0 {
-                        EventKind::VfsRead
-                    } else {
-                        EventKind::VfsWrite
-                    },
+                    kind: received.try_into()?,
+                    tgid: *tgid as i32,
+                    command: process_info.command.clone(),
+                    buildid: process_info.buildid.clone(),
+                    amount: *size as i64,
+                    ustack: *ustack,
+                    kstack: *kstack,
+                    ..Default::default()
+                });
+            }
+            Received::UdpRecv(event)
+            | Received::UdpSend(event)
+            | Received::TcpRecv(event)
+            | Received::TcpSend(event) => {
+                let net_io_event {
+                    r#type: _,
+                    tgid,
+                    ts,
+                    size,
+                    ustack,
+                    kstack,
+                } = event;
+                let process_info = match self.tgid_process_info.get(tgid) {
+                    Some(command) => command,
+                    None => {
+                        anyhow::bail!("missing command for pid {}", tgid);
+                    }
+                };
+                self.group.save_event(Event {
+                    ts: (*ts + self.cfg.timestamp_adjustment) as i64,
+                    kind: received.try_into()?,
                     tgid: *tgid as i32,
                     command: process_info.command.clone(),
                     buildid: process_info.buildid.clone(),
@@ -398,7 +422,11 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 self.stats.total_rows += 1;
                 self.stats.rows_in_current_file += 1;
             }
-            Received::Vfs(_)
+            Received::UdpRecv(_)
+            | Received::UdpSend(_)
+            | Received::TcpRecv(_)
+            | Received::TcpSend(_)
+            | Received::Vfs(_)
             | Received::Block(_)
             | Received::Switch(_)
             | Received::Rss(_)
@@ -498,6 +526,7 @@ unsafe impl Plain for past_types::process_exec_event {}
 unsafe impl Plain for past_types::rss_stat_event {}
 unsafe impl Plain for past_types::blk_io_event {}
 unsafe impl Plain for past_types::vfs_io_event {}
+unsafe impl Plain for past_types::net_io_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -520,6 +549,10 @@ pub(crate) enum Received<'a> {
     Rss(&'a past_types::rss_stat_event),
     Block(&'a past_types::blk_io_event),
     Vfs(&'a past_types::vfs_io_event),
+    UdpRecv(&'a past_types::net_io_event),
+    UdpSend(&'a past_types::net_io_event),
+    TcpRecv(&'a past_types::net_io_event),
+    TcpSend(&'a past_types::net_io_event),
 }
 
 impl<'a> Received<'a> {
@@ -536,6 +569,41 @@ impl<'a> Received<'a> {
             Received::Rss(_) => ProgramName::Rss,
             Received::Block(_) => ProgramName::Block,
             Received::Vfs(_) => ProgramName::Vfs,
+            Received::UdpRecv(_) => ProgramName::Net,
+            Received::UdpSend(_) => ProgramName::Net,
+            Received::TcpRecv(_) => ProgramName::Net,
+            Received::TcpSend(_) => ProgramName::Net,
+        }
+    }
+}
+
+impl<'a> TryFrom<Received<'a>> for EventKind {
+    type Error = anyhow::Error;
+
+    fn try_from(event: Received<'a>) -> Result<Self> {
+        match event {
+            Received::Switch(_) => Ok(EventKind::Switch),
+            Received::Profile(_) => Ok(EventKind::Profile),
+            Received::ProcessExec(_) => anyhow::bail!("exec event is not recorded"),
+            Received::ProcessExit(_) => anyhow::bail!("exit event is not recorded"),
+            Received::TraceEnter(_) => anyhow::bail!("trace enter event is not recorded"),
+            Received::TraceExit(_) => Ok(EventKind::TraceExit),
+            Received::TraceClose(_) => Ok(EventKind::TraceClose),
+            Received::Rss(_) => Ok(EventKind::Rss),
+            Received::Block(ev) => match ev.rw {
+                0 => Ok(EventKind::BlockRead),
+                1 => Ok(EventKind::BlockWrite),
+                _ => anyhow::bail!("unknown block event type"),
+            },
+            Received::Vfs(ev) => match ev.rw {
+                0 => Ok(EventKind::VfsRead),
+                1 => Ok(EventKind::VfsWrite),
+                _ => anyhow::bail!("unknown vfs event type"),
+            },
+            Received::UdpRecv(_) => Ok(EventKind::UdpRecv),
+            Received::UdpSend(_) => Ok(EventKind::UdpSend),
+            Received::TcpRecv(_) => Ok(EventKind::TcpRecv),
+            Received::TcpSend(_) => Ok(EventKind::TcpSend),
         }
     }
 }
@@ -556,6 +624,10 @@ impl<'a> TryFrom<&'a [u8]> for Received<'a> {
             7 => Ok(Received::Rss(to_event(bytes))),
             8 => Ok(Received::Block(to_event(bytes))),
             9 => Ok(Received::Vfs(to_event(bytes))),
+            10 => Ok(Received::UdpRecv(to_event(bytes))),
+            11 => Ok(Received::UdpSend(to_event(bytes))),
+            12 => Ok(Received::TcpRecv(to_event(bytes))),
+            13 => Ok(Received::TcpSend(to_event(bytes))),
             _ => anyhow::bail!("unknown event type"),
         }
     }

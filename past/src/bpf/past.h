@@ -21,8 +21,13 @@
 #define TYPE_RSS_STAT_EVENT 7
 #define TYPE_BLK_IO_EVENT 8
 #define TYPE_VFS_IO_EVENT 9
+#define TYPE_UDP_RECV_EVENT 10
+#define TYPE_UDP_SEND_EVENT 11
+#define TYPE_TCP_RECV_EVENT 12
+#define TYPE_TCP_SEND_EVENT 13
 
-enum errors {
+enum errors
+{
     DROPPED_EVENTS
 };
 
@@ -64,8 +69,8 @@ struct process_exec_event
     __u8 comm[TASK_COMM_LEN];
 };
 
-
-struct tracing_enter_event {
+struct tracing_enter_event
+{
     __u8 type;
     __u64 ts;
     __u32 tgid;
@@ -77,7 +82,8 @@ struct tracing_enter_event {
     __u8 name[TASK_COMM_LEN];
 };
 
-struct tracing_exit_event {
+struct tracing_exit_event
+{
     __u8 type;
     __u64 ts;
     __u32 tgid;
@@ -87,7 +93,8 @@ struct tracing_exit_event {
     __s32 ustack;
 };
 
-struct tracing_close_event {
+struct tracing_close_event
+{
     __u8 type;
     __u64 ts;
     __u32 tgid;
@@ -96,7 +103,8 @@ struct tracing_close_event {
     __u64 span_id;
 };
 
-struct rss_stat_event {
+struct rss_stat_event
+{
     __u8 type;
     __u32 tgid;
     __u64 ts;
@@ -105,8 +113,8 @@ struct rss_stat_event {
     __s32 kstack;
 };
 
-
-struct blk_io_event {
+struct blk_io_event
+{
     __u8 type;
     __u8 rw;
     __u32 tgid;
@@ -117,7 +125,8 @@ struct blk_io_event {
     __s32 kstack;
 };
 
-struct vfs_io_event {
+struct vfs_io_event
+{
     __u8 type;
     __u8 rw;
     __u32 tgid;
@@ -127,5 +136,14 @@ struct vfs_io_event {
     __s32 kstack;
 };
 
+struct net_io_event
+{
+    __u8 type;
+    __u32 tgid;
+    __u64 ts;
+    __u64 size;
+    __s32 ustack;
+    __s32 kstack;
+};
 
 #endif

@@ -25,6 +25,10 @@ pub(crate) enum EventKind {
     BlockWrite,
     VfsRead,
     VfsWrite,
+    UdpRecv,
+    UdpSend,
+    TcpRecv,
+    TcpSend,
 }
 
 impl From<EventKind> for &'static [u8] {
@@ -39,6 +43,10 @@ impl From<EventKind> for &'static [u8] {
             EventKind::BlockWrite => b"blk_write",
             EventKind::VfsRead => b"vfs_read",
             EventKind::VfsWrite => b"vfs_write",
+            EventKind::UdpRecv => b"udp_recv",
+            EventKind::UdpSend => b"udp_send",
+            EventKind::TcpRecv => b"tcp_recv",
+            EventKind::TcpSend => b"tcp_send",
         }
     }
 }

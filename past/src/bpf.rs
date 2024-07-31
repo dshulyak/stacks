@@ -24,6 +24,7 @@ pub(crate) enum ProgramName {
     TraceClose,
     Block,
     Vfs,
+    Net,
 }
 
 impl From<ProgramName> for &'static str {
@@ -39,6 +40,7 @@ impl From<ProgramName> for &'static str {
             ProgramName::TraceClose => "trace_close",
             ProgramName::Block => "block",
             ProgramName::Vfs => "vfs",
+            ProgramName::Net => "net",
         }
     }
 }
@@ -50,6 +52,7 @@ pub(crate) enum Program {
     Switch(Switch),
     Block(Block),
     Vfs(Vfs),
+    Net(Net),
 }
 
 impl Display for Program {
@@ -60,6 +63,7 @@ impl Display for Program {
             Program::Switch(switch) => write!(f, "{}", switch),
             Program::Block(block) => write!(f, "{}", block),
             Program::Vfs(vfs) => write!(f, "{}", vfs),
+            Program::Net(net) => write!(f, "{}", net),
         }
     }
 }
@@ -75,6 +79,7 @@ impl TryFrom<&str> for Program {
             Some("switch") => Ok(Program::Switch(parts.try_into()?)),
             Some("block") => Ok(Program::Block(parts.try_into()?)),
             Some("vfs") => Ok(Program::Vfs(parts.try_into()?)),
+            Some("net") => Ok(Program::Net(parts.try_into()?)),
             Some(program) => anyhow::bail!("invalid program {}", program),
             None => anyhow::bail!("empty program"),
         }
@@ -88,6 +93,7 @@ pub(crate) struct Programs {
     switch: Option<Switch>,
     block: Option<Block>,
     vfs: Option<Vfs>,
+    net: Option<Net>,
 }
 
 impl Display for Programs {
@@ -98,6 +104,7 @@ impl Display for Programs {
             switch,
             block,
             vfs,
+            net,
         } = self;
 
         let mut programs = vec![];
@@ -116,6 +123,9 @@ impl Display for Programs {
         if let Some(vfs) = vfs {
             programs.push(format!("{}", vfs));
         }
+        if let Some(net) = net {
+            programs.push(format!("{}", net));
+        }
         write!(f, "{}", programs.join(", "))
     }
 }
@@ -128,6 +138,7 @@ impl Programs {
             switch: None,
             block: None,
             vfs: None,
+            net: None,
         }
     }
 
@@ -169,6 +180,12 @@ impl Programs {
                         anyhow::bail!("duplicate vfs. {} and {}", programs.vfs.unwrap(), vfs);
                     }
                     programs.vfs = Some(vfs);
+                }
+                Program::Net(net) => {
+                    if programs.net.is_some() {
+                        anyhow::bail!("duplicate net. {} and {}", programs.net.unwrap(), net);
+                    }
+                    programs.net = Some(net);
                 }
             }
         }
@@ -398,6 +415,41 @@ impl Default for Rss {
 }
 
 #[derive(Debug, Clone)]
+pub(crate) struct Net {
+    stacks: Stacks,
+}
+
+impl Default for Net {
+    fn default() -> Self {
+        Net { stacks: Stacks::N }
+    }
+}
+
+impl Display for Net {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "net:{}", self.stacks)
+    }
+}
+
+impl TryFrom<Split<'_, char>> for Net {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Split<char>) -> Result<Self> {
+        let mut net = Net::default();
+        for item in value {
+            let maybe_stacks: Result<Stacks> = item.try_into();
+            match maybe_stacks {
+                Ok(stacks) => {
+                    net.stacks = stacks;
+                }
+                Err(_) => anyhow::bail!("invalid configuration item for net {}", item),
+            }
+        }
+        Ok(net)
+    }
+}
+
+#[derive(Debug, Clone)]
 enum Stacks {
     U,
     K,
@@ -462,7 +514,7 @@ pub(crate) fn link<'a>(
     stacks_max_entries: u32,
 ) -> Result<(PastSkel<'a>, Vec<Link>)> {
     let mut skel = PastSkelBuilder::default().open().context("open skel")?;
-    let cfg = &mut skel.rodata_mut().cfg;
+    let cfg: &mut crate::past_types::__anon_1 = &mut skel.rodata_mut().cfg;
     cfg.filter_tgid.write(true);
     cfg.filter_comm.write(true);
     cfg.debug.write(debug);
@@ -486,6 +538,13 @@ pub(crate) fn link<'a>(
     if let Some(Block { stacks }) = &programs.block {
         decode_stack_options_into_bpf_cfg(stacks, &mut cfg.blk_kstack, &mut cfg.blk_ustack);
     }
+    if let Some(Vfs { stacks }) = &programs.vfs {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.vfs_kstack, &mut cfg.vfs_ustack);
+    }
+    if let Some(Net { stacks }) = &programs.net {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.net_kstack, &mut cfg.net_ustack);
+    }
+
     skel.maps_mut()
         .events()
         .set_max_entries(events_max_entries)
@@ -540,7 +599,12 @@ pub(crate) fn link<'a>(
         links.push(skel.progs_mut().vfs_readv().attach().context("attach vfs readv")?);
         links.push(skel.progs_mut().vfs_writev().attach().context("attach vfs writev")?);
     }
-
+    if programs.net.is_some() {
+        links.push(skel.progs_mut().udp_recvmsg().attach().context("attach net recvmsg")?);
+        links.push(skel.progs_mut().udp_sendmsg().attach().context("attach net sendmsg")?);
+        links.push(skel.progs_mut().tcp_recvmsg().attach().context("attach net recvmsg")?);
+        links.push(skel.progs_mut().tcp_sendmsg().attach().context("attach net sendmsg")?);
+    }
     links.push(
         skel.progs_mut()
             .handle__sched_process_exit()

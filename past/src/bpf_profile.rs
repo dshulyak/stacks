@@ -201,5 +201,15 @@ fn collect_stats_for_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>, fd
                 read_cnt + readv_cnt + write_cnt + writev_cnt,
             ))
         }
+        ProgramName::Net => {
+            let (udp_recv_ns, udp_recv_cnt) = fd.get_stats(progs.udp_recvmsg())?;
+            let (udp_send_ns, udp_send_cnt) = fd.get_stats(progs.udp_sendmsg())?;
+            let (tcp_recv_ns, tcp_recv_cnt) = fd.get_stats(progs.tcp_recvmsg())?;
+            let (tcp_send_ns, tcp_send_cnt) = fd.get_stats(progs.tcp_sendmsg())?;
+            Ok((
+                udp_recv_ns + udp_send_ns + tcp_recv_ns + tcp_send_ns,
+                udp_recv_cnt + udp_send_cnt + tcp_recv_cnt + tcp_send_cnt,
+            ))
+        }
     }
 }

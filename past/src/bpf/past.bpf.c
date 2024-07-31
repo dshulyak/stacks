@@ -31,6 +31,8 @@ const volatile struct
     bool blk_kstack;
     bool vfs_ustack;
     bool vfs_kstack;
+    bool net_ustack;
+    bool net_kstack;
     __u64 wakeup_bytes;
     __u16 rss_stat_throttle;
     __u64 minimal_switch_duration;
@@ -48,6 +50,8 @@ const volatile struct
     .blk_kstack = false,
     .vfs_ustack = false,
     .vfs_kstack = false,
+    .net_ustack = false,
+    .net_kstack = false,
     .wakeup_bytes = 10 << 10,
     .rss_stat_throttle = 0,
     .minimal_switch_duration = 0,
@@ -757,6 +761,68 @@ int vfs_writev(u64 *ctx)
 	return on_vfs_event(ctx, 1);
 }
 
+__always_inline int on_net_event(u64 *ctx, __u8 type) 
+{
+    u64 __pid_tgid = bpf_get_current_pid_tgid();
+    gid_t tgid = __pid_tgid >> 32;
+    if (apply_tgid_filter(tgid) > 0)
+    {
+        return 0;
+    }
+    struct net_io_event *event = reserve_event(sizeof(struct net_io_event));
+    if (!event)
+    {
+        bpf_printk_debug("ringbuf full. dropping net io event\n");
+        return 0;
+    }
+    event->type = type;
+    event->ts = bpf_ktime_get_ns();
+    event->tgid = tgid;
+    event->size = (__u64)ctx[2];
+    if (cfg.net_ustack)
+    {
+        event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->ustack = -1;
+    }
+    if (cfg.net_kstack)
+    {
+        event->kstack = bpf_get_stackid(ctx, &stackmap, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
+    }
+    else
+    {
+        event->kstack = -1;
+    }
+    submit_event(event);
+    return 0;
+}
+
+SEC("fentry/udp_recvmsg")
+int udp_recvmsg(u64 *ctx)
+{
+    return on_net_event(ctx, TYPE_UDP_RECV_EVENT);
+}   
+
+SEC("fentry/udp_sendmsg")
+int udp_sendmsg(u64 *ctx)
+{
+    return on_net_event(ctx, TYPE_UDP_SEND_EVENT);
+}
+
+SEC("fentry/tcp_recvmsg")
+int tcp_recvmsg(u64 *ctx)
+{
+    return on_net_event(ctx, TYPE_TCP_RECV_EVENT);
+}
+
+SEC("fentry/tcp_sendmsg")
+int tcp_sendmsg(u64 *ctx)
+{
+    return on_net_event(ctx, TYPE_TCP_SEND_EVENT);
+}
+
 // cargo libbpf doesn't generate bindings without definitions
 
 struct switch_event _switch_event = {0};
@@ -769,5 +835,6 @@ struct process_exec_event _process_exec_event = {0};
 struct rss_stat_event _rss_stat_event = {0};
 struct blk_io_event _blk_io_event = {0};
 struct vfs_io_event _vfs_io_event = {0};
+struct net_io_event _net_io_event = {0};
 
 char LICENSE[] SEC("license") = "Dual MIT/GPL";
