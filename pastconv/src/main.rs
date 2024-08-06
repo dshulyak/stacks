@@ -1,10 +1,12 @@
 use std::{path::PathBuf, str};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
+use common::session;
 
-pub mod common;
-pub mod pprof;
+mod common;
+mod pprof;
+mod trace;
 
 const CPU_PPROF_SQL: &str = include_str!("sql/cpu_ustacks_for_command.sql");
 const OFFCPU_PPROF_SQL: &str = include_str!("sql/offcpu_stacks_for_command.sql");
@@ -29,6 +31,17 @@ enum Command {
         binary: Option<PathBuf>,
         #[clap(subcommand)]
         cmd: PprofCommand,
+    },
+    Trace {
+        #[clap(
+            short,
+            long,
+            help = "path to the file where exported json will be stored",
+            default_value = "/tmp/trace.json"
+        )]
+        destination: PathBuf,
+        #[clap(index(1), num_args = 1.., help = "path to queries that should be added to the trace")]
+        queries: Vec<PathBuf>,
     },
 }
 
@@ -91,5 +104,13 @@ async fn main() -> Result<()> {
                 pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary).await
             }
         },
+        Command::Trace { destination, queries } => {
+            let ctx = session(&opt.register).await?;
+            let queries = queries
+                .iter()
+                .map(|p| std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display())))
+                .collect::<Result<Vec<_>>>()?;
+            trace::export(&ctx, queries, destination).await
+        }
     }
 }
