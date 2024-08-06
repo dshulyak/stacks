@@ -5,7 +5,4 @@ members = ["e2e", "past", "pastconv", "tracing-past"]
 opt-level = 3
 lto = true
 codegen-units = 1
-
-[profile.release-debuginfo]
-inherits = "release"
 debug = 1
