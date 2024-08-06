@@ -484,33 +484,6 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
     event->pid = pid;
     event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
-    event->ustack = -1;
-    submit_event(event);
-    return 0;
-}
-
-SEC("usdt")
-int BPF_USDT(past_tracing_exit_stack, u64 span_id)
-{
-    u64 __pid_tgid = bpf_get_current_pid_tgid();
-    gid_t tgid = __pid_tgid >> 32;
-    pid_t pid = __pid_tgid;
-    if (apply_tgid_filter(tgid) > 0)
-    {
-        return 0;
-    }
-    struct tracing_exit_event *event = reserve_event(sizeof(struct tracing_exit_event));
-    if (!event)
-    {
-        bpf_printk_debug("ringbuf full. dropping tracing exit event\n");
-        return 0;
-    }
-    event->type = TYPE_TRACING_EXIT_EVENT;
-    event->ts = bpf_ktime_get_ns();
-    event->tgid = tgid;
-    event->pid = pid;
-    event->cpu_id = bpf_get_smp_processor_id();
-    event->span_id = span_id;
     event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
     submit_event(event);
     return 0;

@@ -629,11 +629,6 @@ pub(crate) fn link<'a>(
             .past_tracing_exit()
             .attach_usdt(-1, u, "past_tracing", "exit")
             .context("usdt exit")?;
-        let _usdt_exit_stack = skel
-            .progs_mut()
-            .past_tracing_exit_stack()
-            .attach_usdt(-1, u, "past_tracing", "exit_stack")
-            .context("exit stack link")?;
         let _usdt_close = skel
             .progs_mut()
             .past_tracing_close()
@@ -641,7 +636,6 @@ pub(crate) fn link<'a>(
             .context("usdt close")?;
         links.push(_usdt_enter);
         links.push(_usdt_exit);
-        links.push(_usdt_exit_stack);
         links.push(_usdt_close);
     }
 
