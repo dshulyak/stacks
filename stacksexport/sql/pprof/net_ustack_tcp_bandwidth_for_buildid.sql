@@ -5,6 +5,6 @@ select
 from
     stacks
 where
-    kind in ('tcp_recv', 'tcp_send') and buildid = decode('?buildid', 'hex')
+    kind in ('tcp_send', 'tcp_recv') and buildid = decode('?buildid', 'hex')
 group by
     ustack
