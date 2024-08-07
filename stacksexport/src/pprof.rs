@@ -27,8 +27,6 @@ mod proto {
     include!(concat!(env!("CARGO_MANIFEST_DIR"), "/src/proto/perftools.profiles.rs"));
 }
 
-const START_TIME: &str = include_str!("sql/start_time.sql");
-
 const COMMAND_BINDING: &str = "?command";
 const BUILID_BINDING: &str = "?buildid";
 
@@ -40,7 +38,6 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
     let mut location_table = vec![];
     let mut samples_table = vec![];
     let mut duration = 0;
-    let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
         for stack in sampled_stack.stacks() {
@@ -94,7 +91,6 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
         string_table: strings.strings_table(),
         location: location_table,
         function: function_table,
-        time_nanos: start,
         duration_nanos: duration,
         ..Default::default()
     };
@@ -130,7 +126,6 @@ async fn generate_pprof_with_symbolization(
         _non_exhaustive: (),
     });
 
-    let start: i64 = get_start_time(ctx).await?;
     for sampled_stack in batch.iter() {
         let mut locations = vec![];
         let stacks = sampled_stack.stacks().collect::<Vec<_>>();
@@ -213,7 +208,6 @@ async fn generate_pprof_with_symbolization(
         string_table: strings.strings_table(),
         location: location_table,
         function: function_table,
-        time_nanos: start,
         duration_nanos: duration,
         ..Default::default()
     };
@@ -344,25 +338,6 @@ impl PprofStringDictionary {
         }
         strings
     }
-}
-
-async fn get_start_time(ctx: &SessionContext) -> Result<i64> {
-    let min_timestamp = ctx
-        .sql(START_TIME)
-        .await?
-        .collect()
-        .await?
-        .into_iter()
-        .next()
-        .expect("expecting single batch")
-        .column(0)
-        .as_primitive_opt::<UInt64Type>()
-        .expect("start time should be uint64")
-        .into_iter()
-        .next()
-        .expect("expecting single row")
-        .expect("single timestamp value");
-    Ok(min_timestamp as i64)
 }
 
 pub(crate) async fn pprof(
