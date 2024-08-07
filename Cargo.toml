@@ -1,5 +1,5 @@
 [workspace]
-members = ["e2e", "past", "pastconv", "tracing-past"]
+members = ["e2e", "stacks", "stacksexport", "tracing-stacks"]
 
 [profile.release]
 opt-level = 3

@@ -1,9 +1,9 @@
 {
     "rust-analyzer.check.command": "clippy",
     "rust-analyzer.linkedProjects": [
-        "past/Cargo.toml",
-        "tracing-past/Cargo.toml",
-        "pastconv/Cargo.toml",
+        "stacks/Cargo.toml",
+        "tracing-stacks/Cargo.toml",
+        "stacksexport/Cargo.toml",
         "e2e/Cargo.toml"
     ],
     "files.associations": {

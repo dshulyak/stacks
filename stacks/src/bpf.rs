@@ -9,7 +9,7 @@ use libbpf_rs::{
 
 use crate::{
     perf_event::{attach_perf_event, perf_event_per_cpu},
-    PastSkel, PastSkelBuilder,
+    StacksSkel, StacksSkelBuilder,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -512,9 +512,9 @@ pub(crate) fn link<'a>(
     debug: bool,
     events_max_entries: u32,
     stacks_max_entries: u32,
-) -> Result<(PastSkel<'a>, Vec<Link>)> {
-    let mut skel = PastSkelBuilder::default().open().context("open skel")?;
-    let cfg: &mut crate::past_types::__anon_1 = &mut skel.rodata_mut().cfg;
+) -> Result<(StacksSkel<'a>, Vec<Link>)> {
+    let mut skel = StacksSkelBuilder::default().open().context("open skel")?;
+    let cfg: &mut crate::stacks_types::__anon_1 = &mut skel.rodata_mut().cfg;
     cfg.filter_tgid.write(true);
     cfg.filter_comm.write(true);
     cfg.debug.write(debug);
@@ -621,18 +621,18 @@ pub(crate) fn link<'a>(
     for u in usdt {
         let _usdt_enter = skel
             .progs_mut()
-            .past_tracing_enter()
-            .attach_usdt(-1, u, "past_tracing", "enter")
+            .stacks_tracing_enter()
+            .attach_usdt(-1, u, "stacks_tracing", "enter")
             .context("usdt enter")?;
         let _usdt_exit = skel
             .progs_mut()
-            .past_tracing_exit()
-            .attach_usdt(-1, u, "past_tracing", "exit")
+            .stacks_tracing_exit()
+            .attach_usdt(-1, u, "stacks_tracing", "exit")
             .context("usdt exit")?;
         let _usdt_close = skel
             .progs_mut()
-            .past_tracing_close()
-            .attach_usdt(-1, u, "past_tracing", "close")
+            .stacks_tracing_close()
+            .attach_usdt(-1, u, "stacks_tracing", "close")
             .context("usdt close")?;
         links.push(_usdt_enter);
         links.push(_usdt_exit);

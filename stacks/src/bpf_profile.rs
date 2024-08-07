@@ -16,7 +16,7 @@ use libbpf_rs::{
 };
 use tracing::info;
 
-use crate::{bpf::ProgramName, PastProgs};
+use crate::{bpf::ProgramName, StacksProgs};
 
 fn enable() -> Result<StatsFd> {
     let fd = unsafe { bpf_enable_stats(BPF_STATS_RUN_TIME) };
@@ -135,7 +135,7 @@ impl Profiler {
         *counter += 1;
     }
 
-    pub(crate) fn log_stats(&mut self, progs: &PastProgs) -> Result<()> {
+    pub(crate) fn log_stats(&mut self, progs: &StacksProgs) -> Result<()> {
         let ts: time::Instant = time::Instant::now();
         for (name, collected_cnt) in self.events_per_program_counter.iter() {
             let (runtime_ns, runtime_cnt) = collect_stats_for_program(*name, progs, &self.fd)?;
@@ -167,7 +167,7 @@ impl Profiler {
         Ok(())
     }
 
-    pub(crate) fn log_stats_on_interval(&mut self, progs: &PastProgs) -> Result<()> {
+    pub(crate) fn log_stats_on_interval(&mut self, progs: &StacksProgs) -> Result<()> {
         let ts: time::Instant = time::Instant::now();
         if ts.duration_since(self.last) < self.interval {
             return Ok(());
@@ -176,16 +176,16 @@ impl Profiler {
     }
 }
 
-fn collect_stats_for_program<'a>(name: ProgramName, progs: &'a PastProgs<'a>, fd: &StatsFd) -> Result<(u64, u64)> {
+fn collect_stats_for_program<'a>(name: ProgramName, progs: &'a StacksProgs<'a>, fd: &StatsFd) -> Result<(u64, u64)> {
     match name {
         ProgramName::Profile => fd.get_stats(progs.handle__perf_event()),
         ProgramName::Rss => fd.get_stats(progs.handle__mm_trace_rss_stat()),
         ProgramName::Switch => fd.get_stats(progs.handle__sched_switch()),
         ProgramName::Exit => fd.get_stats(progs.handle__sched_process_exit()),
         ProgramName::Exec => fd.get_stats(progs.handle__sched_process_exec()),
-        ProgramName::TraceEnter => fd.get_stats(progs.past_tracing_enter()),
-        ProgramName::TraceExit => fd.get_stats(progs.past_tracing_exit()),
-        ProgramName::TraceClose => fd.get_stats(progs.past_tracing_close()),
+        ProgramName::TraceEnter => fd.get_stats(progs.stacks_tracing_enter()),
+        ProgramName::TraceExit => fd.get_stats(progs.stacks_tracing_exit()),
+        ProgramName::TraceClose => fd.get_stats(progs.stacks_tracing_close()),
         ProgramName::Block => {
             let (start_ns, start_cnt) = fd.get_stats(progs.block_io_start())?;
             let (done_ns, done_cnt) = fd.get_stats(progs.block_io_done())?;

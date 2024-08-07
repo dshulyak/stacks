@@ -77,7 +77,7 @@ struct Opt {
 async fn main() -> Result<()> {
     let registry = Registry::default()
         .with(
-            tracing_past::PastSubscriber {}.with_filter(
+            tracing_stacks::StacksSubscriber {}.with_filter(
                 tracing_subscriber::EnvFilter::builder()
                     .with_default_directive(LevelFilter::INFO.into())
                     .from_env_lossy(),

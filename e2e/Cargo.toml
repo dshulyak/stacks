@@ -5,7 +5,7 @@ edition = "2021"
 
 [dependencies]
 tracing = "0.1.40"
-tracing-past = { path = "../tracing-past" }
+tracing-stacks = { path = "../tracing-stacks" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 proptest = "1.4.0"
 proptest-state-machine = "0.3.0"

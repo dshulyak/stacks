@@ -16,7 +16,7 @@ const RSS_PPROF_SQL: &str = include_str!("sql/ustack_rss_growth_for_command.sql"
 struct Opt {
     #[clap(subcommand)]
     cmd: Command,
-    #[clap(short, long, global = true, default_value = "/tmp/past/STACKS-*.parquet")]
+    #[clap(short, long, global = true, default_value = "/tmp/stacks/STACKS-*.parquet")]
     register: String,
     #[clap(short, long, global = true, help = "print version and exit")]
     version: bool,
@@ -81,7 +81,7 @@ third column can be any data that is useful for pprof, for example in offcpu pro
 async fn main() -> Result<()> {
     let opt = Opt::parse();
     if opt.version {
-        println!("pastconv {}", env!("VERSION"));
+        println!("stacksexport {}", env!("VERSION"));
         return Ok(());
     }
     match opt.cmd {

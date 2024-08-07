@@ -1,5 +1,5 @@
 [package]
-name = "past"
+name = "stacks"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,7 +21,7 @@ libbpf-rs = { version = "0.23", default-features = false }
 libc = "0.2"
 plain = "0.2"
 tracing = "0.1.40"
-tracing-past = { path = "../tracing-past" }
+tracing-stacks = { path = "../tracing-stacks" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
 clap = { version = "4.5.4", features = ["derive"] }
 blazesym = { git = "https://github.com/dshulyak/blazesym.git", branch = "v0.2.0-alpha.12-caching" }

@@ -23,15 +23,15 @@ use tracing::level_filters::LevelFilter;
 use tracing_subscriber::EnvFilter;
 
 use crate::{
-    past::past_types,
+    stacks::stacks_types,
     state::{self, null_terminated, to_bytes, Received},
     symbolizer::{Frames, Symbolizer},
 };
 
 #[derive(Debug, Clone)]
 pub enum Op {
-    Switch(past_types::switch_event),
-    Perf(past_types::perf_cpu_event),
+    Switch(stacks_types::switch_event),
+    Perf(stacks_types::perf_cpu_event),
 }
 
 impl Op {
@@ -160,11 +160,11 @@ pub struct RefState {
     // in the expected order, however it will require additional cycles.
     timestamp_per_cpu: Vec<u64>,
 
-    traces: Vec<past_types::switch_event>,
-    stacks: Vec<past_types::perf_cpu_event>,
+    traces: Vec<stacks_types::switch_event>,
+    stacks: Vec<stacks_types::perf_cpu_event>,
 
-    persisted_traces: Vec<past_types::switch_event>,
-    persisted_stacks: Vec<past_types::perf_cpu_event>,
+    persisted_traces: Vec<stacks_types::switch_event>,
+    persisted_stacks: Vec<stacks_types::perf_cpu_event>,
 }
 
 impl RefState {
@@ -237,7 +237,7 @@ impl ReferenceStateMachine for RefModel {
             (-1..15i32),
         )
             .prop_map(
-                move |(cpu, duration, thread, ustack, kstack)| past_types::switch_event {
+                move |(cpu, duration, thread, ustack, kstack)| stacks_types::switch_event {
                     r#type: 0,
                     cpu_id: cpu as u32,
                     start: cores[cpu as usize],
@@ -261,7 +261,7 @@ impl ReferenceStateMachine for RefModel {
             (-1..15i32),
         )
             .prop_map(
-                move |(cpu, duration, thread, ustack, kstack)| past_types::perf_cpu_event {
+                move |(cpu, duration, thread, ustack, kstack)| stacks_types::perf_cpu_event {
                     r#type: 1,
                     cpu_id: cpu,
                     timestamp: cores[cpu as usize] + duration,
@@ -347,7 +347,7 @@ impl StateMachineTest for TestState {
 
         let mut state = State::new(ref_state.row_group_size, ref_state.frames.clone());
         for thread in ref_state.threads.iter() {
-            let fake_exec_event = past_types::process_exec_event {
+            let fake_exec_event = stacks_types::process_exec_event {
                 tgid: thread.tgid as u32,
                 comm: thread.command(),
                 ..Default::default()
