@@ -19,7 +19,3 @@ sudo rm -f /bin/clang && sudo ln -s /usr/bin/clang-14 /bin/clang
 sudo snap install rustup --classic
 rustup default stable
 ```
-
-#### Trace viewer
-
-> tracing/bin/trace2html /tmp/trace.json --output /home/dd/trace.html && open /home/dd/trace.html
