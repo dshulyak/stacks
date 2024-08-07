@@ -135,12 +135,13 @@ async fn generate_pprof_with_symbolization(
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
         for (stack, symbolized) in multizip((stacks.iter(), symbolized)) {
-            let function_id = match functions.get_or_insert(stack.name.as_ref()) {
+            let fname = format!("{}-{:x}", stack.name, stack.offset);
+            let function_id = match functions.get_or_insert(&fname) {
                 DictionaryEntry::Existing(function_id) => function_id,
                 DictionaryEntry::New(function_id) => {
                     let mut function = proto::Function {
                         id: function_id as u64,
-                        name: *strings.get_or_insert(stack.name.as_ref()),
+                        name: *strings.get_or_insert(&fname),
                         ..Default::default()
                     };
                     if let Symbolized::Sym(sym) = &symbolized {
