@@ -1,4 +1,8 @@
-use std::{io::{Write, Read}, net::{TcpListener, TcpStream}, thread::scope};
+use std::{
+    io::{Read, Write},
+    net::{TcpListener, TcpStream},
+    thread::scope,
+};
 
 use clap::Parser;
 

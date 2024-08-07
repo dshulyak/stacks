@@ -1,5 +1,5 @@
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use clap::Parser;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -30,7 +30,7 @@ async fn main() {
         let mut ping = vec![0u8; (opt.ping << 10) as usize];
         let pong = vec![0u8; (opt.pong << 10) as usize];
         for _ in 0..opt.iters {
-            let n = client.read_exact(&mut ping).await.expect("ping read");
+            client.read_exact(&mut ping).await.expect("ping read");
             client.write_all(pong.as_slice()).await.expect("pong write");
         }
     });
