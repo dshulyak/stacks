@@ -7,7 +7,8 @@ use libbpf_cargo::SkeletonBuilder;
 const SRC: &str = "src/bpf/stacks.bpf.c";
 
 fn main() -> Result<()> {
-    let out = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set in build script")).join("stacks.skel.rs");
+    let out =
+        PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set in build script")).join("stacks.skel.rs");
 
     let arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH must be set in build script");
     let mut builder = SkeletonBuilder::new();
