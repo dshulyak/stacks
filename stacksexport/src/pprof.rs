@@ -372,6 +372,5 @@ pub(crate) async fn pprof(
     let mut buf = vec![];
     profile.encode(&mut buf)?;
     f.write_all(&buf)?;
-    println!("path: {}", destination.display());
     Ok(())
 }

@@ -100,7 +100,7 @@ struct Counter {
     args: CounterArgs,
 }
 
-pub(crate) async fn export(ctx: &SessionContext, queries: Vec<String>, out: PathBuf) -> Result<()> {
+pub(crate) async fn export(ctx: &SessionContext, queries: Vec<String>, out: &PathBuf) -> Result<()> {
     let mut output = File::create(out)?;
     let stacks_graph = StackTraceGraph {
         next_id: RefCell::new(0),
