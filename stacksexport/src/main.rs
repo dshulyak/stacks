@@ -3,6 +3,7 @@ use std::{path::PathBuf, str};
 use anyhow::{Context, Result};
 use clap::Parser;
 use common::session;
+use tracing::{info, level_filters::LevelFilter};
 
 mod common;
 mod pprof;
@@ -52,9 +53,17 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::builder()
+                .with_default_directive(LevelFilter::INFO.into())
+                .from_env_lossy(),
+        )
+        .init();
+
     let opt = Opt::parse();
     if opt.version {
-        println!("stacksexport {}", env!("VERSION"));
+        info!("stacksexport {}", env!("VERSION"));
         return Ok(());
     }
     match opt.cmd {
@@ -65,7 +74,9 @@ async fn main() -> Result<()> {
             binary,
         } => {
             let query = std::fs::read_to_string(query_file)?;
-            pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary).await
+            pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary).await?;
+            info!("pprof is exported to {}", destination.display());    
+            Ok(())
         }
         Command::Trace { destination, queries } => {
             let ctx = session(&opt.register).await?;
@@ -73,7 +84,9 @@ async fn main() -> Result<()> {
                 .iter()
                 .map(|p| std::fs::read_to_string(p).with_context(|| format!("reading {}", p.display())))
                 .collect::<Result<Vec<_>>>()?;
-            trace::export(&ctx, queries, destination).await
+            trace::export(&ctx, queries, &destination).await?;
+            info!("trace is exported to {}", destination.display());
+            Ok(())
         }
     }
 }
