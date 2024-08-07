@@ -25,10 +25,10 @@ use crate::{
     symbolizer::{BlazesymSymbolizer, Frames, Symbolizer},
 };
 
-mod past {
-    include!(concat!(env!("OUT_DIR"), "/past.skel.rs"));
+mod stacks {
+    include!(concat!(env!("OUT_DIR"), "/stacks.skel.rs"));
 }
-use past::*;
+use stacks::*;
 
 mod bpf;
 mod bpf_profile;
@@ -49,7 +49,7 @@ struct Opt {
     )]
     commands: Vec<String>,
 
-    #[clap(short, long, default_value = "/tmp/past/")]
+    #[clap(short, long, default_value = "/tmp/stacks/")]
     dir: PathBuf,
 
     #[clap(long, default_value = "STACKS")]
@@ -126,7 +126,7 @@ examples:
     #[clap(
         short,
         long,
-        help = "path to the binary instrumented with past_tracing usdt provider"
+        help = "path to the binary instrumented with stacks_tracing usdt provider"
     )]
     usdt: Vec<PathBuf>,
 
@@ -151,7 +151,7 @@ examples:
 fn main() -> Result<()> {
     let registry = Registry::default()
         .with(
-            tracing_past::PastSubscriber {}.with_filter(
+            tracing_stacks::StacksSubscriber {}.with_filter(
                 tracing_subscriber::EnvFilter::builder()
                     .with_default_directive(LevelFilter::INFO.into())
                     .from_env_lossy(),
@@ -168,7 +168,7 @@ fn main() -> Result<()> {
 
     let opt: Opt = Opt::parse();
     if opt.version {
-        println!("past {}", env!("VERSION"));
+        println!("stacks {}", env!("VERSION"));
         return Ok(());
     }
     if opt.commands.is_empty() {
@@ -240,7 +240,7 @@ fn main() -> Result<()> {
         BlazesymSymbolizer::new(),
     )?;
     for proc in procs.iter() {
-        let fake_exec_event = past_types::process_exec_event {
+        let fake_exec_event = stacks_types::process_exec_event {
             timestamp: uptime.as_nanos() as u64,
             tgid: proc.tgid as u32,
             comm: proc.comm,
@@ -275,7 +275,7 @@ fn main() -> Result<()> {
                 program.drop_known_state()?;
                 let scanned = scan_proc(&comms)?;
                 for comm in scanned {
-                    let fake_exec_event = past_types::process_exec_event {
+                    let fake_exec_event = stacks_types::process_exec_event {
                         timestamp: uptime.as_nanos() as u64,
                         tgid: comm.tgid as u32,
                         comm: comm.comm,
@@ -304,9 +304,9 @@ enum ErrorConsume {
 
 fn consume_events<Fr: Frames, Sym: Symbolizer>(
     state: &mut state::State<Fr, Sym>,
-    maps: &PastMaps,
+    maps: &StacksMaps,
     profiler: Option<&mut RefCell<Profiler>>,
-    progs: &PastProgs,
+    progs: &StacksProgs,
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
     poll_interval: Duration,
@@ -387,7 +387,7 @@ impl Frames for MapFrames<'_> {
     }
 }
 
-// this value must match enum in past/src/bpf/past.h
+// this value must match enum in stacks/src/bpf/stacks.h
 // i need to lookup how to generate bindings for enums
 const DROPPED_EVENTS: u32 = 0;
 

@@ -4,7 +4,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/usdt.bpf.h>
 
-#include "past.h"
+#include "stacks.h"
 
 // drop non informative kernel frames in sched_switch tracepoint
 // [bpf_prog_bc47227d8acb679b_handle__sched_switch,
@@ -434,7 +434,7 @@ int handle__sched_process_exec(u64 *ctx)
 }
 
 SEC("usdt")
-int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 amount, void *name)
+int BPF_USDT(stacks_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 amount, void *name)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
@@ -463,7 +463,7 @@ int BPF_USDT(past_tracing_enter, u64 span_id, u64 parent_span_id, u64 id, u64 am
 }
 
 SEC("usdt")
-int BPF_USDT(past_tracing_exit, u64 span_id)
+int BPF_USDT(stacks_tracing_exit, u64 span_id)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
@@ -490,7 +490,7 @@ int BPF_USDT(past_tracing_exit, u64 span_id)
 }
 
 SEC("usdt")
-int BPF_USDT(past_tracing_close, u64 span_id)
+int BPF_USDT(stacks_tracing_close, u64 span_id)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;

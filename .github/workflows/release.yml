@@ -35,23 +35,23 @@ jobs:
                     draft: false
                     prerelease: true
             - 
-                name: upload past x86_64
+                name: upload stacks x86_64
                 uses: actions/upload-release-asset@v1
                 env:
                     GITHUB_TOKEN: ${{ github.token }}
                 with:
                     upload_url: ${{ steps.create_release.outputs.upload_url }}
-                    asset_path: past-x86_64-unknown-linux-gnu/past
-                    asset_name: past-x86_64-unknown-linux-gnu     
+                    asset_path: stacks-x86_64-unknown-linux-gnu/stacks
+                    asset_name: stacks-x86_64-unknown-linux-gnu     
                     asset_content_type: application/octet-stream
             - 
-                name: upload pastconv x86_64
+                name: upload stacksexport x86_64
                 uses: actions/upload-release-asset@v1
                 env:
                     GITHUB_TOKEN: ${{ github.token }}
                 with:
                     upload_url: ${{ steps.create_release.outputs.upload_url }}
-                    asset_path: past-x86_64-unknown-linux-gnu/pastconv
-                    asset_name: past-x86_64-unknown-linux-gnu     
+                    asset_path: stacks-x86_64-unknown-linux-gnu/stacksexport
+                    asset_name: stacks-x86_64-unknown-linux-gnu     
                     asset_content_type: application/octet-stream
     

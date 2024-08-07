@@ -14,7 +14,7 @@ use tracing::{debug, info, warn};
 use crate::{
     bpf::ProgramName,
     parquet::{Compression, Event, EventKind, Group, GroupWriter},
-    past_types::{self, blk_io_event, net_io_event, vfs_io_event},
+    stacks_types::{self, blk_io_event, net_io_event, vfs_io_event},
     symbolizer::{symbolize, Frames, Symbolizer},
 };
 
@@ -516,17 +516,17 @@ fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, inde
     Ok(())
 }
 
-unsafe impl Plain for past_types::switch_event {}
-unsafe impl Plain for past_types::perf_cpu_event {}
-unsafe impl Plain for past_types::tracing_enter_event {}
-unsafe impl Plain for past_types::tracing_exit_event {}
-unsafe impl Plain for past_types::tracing_close_event {}
-unsafe impl Plain for past_types::process_exit_event {}
-unsafe impl Plain for past_types::process_exec_event {}
-unsafe impl Plain for past_types::rss_stat_event {}
-unsafe impl Plain for past_types::blk_io_event {}
-unsafe impl Plain for past_types::vfs_io_event {}
-unsafe impl Plain for past_types::net_io_event {}
+unsafe impl Plain for stacks_types::switch_event {}
+unsafe impl Plain for stacks_types::perf_cpu_event {}
+unsafe impl Plain for stacks_types::tracing_enter_event {}
+unsafe impl Plain for stacks_types::tracing_exit_event {}
+unsafe impl Plain for stacks_types::tracing_close_event {}
+unsafe impl Plain for stacks_types::process_exit_event {}
+unsafe impl Plain for stacks_types::process_exec_event {}
+unsafe impl Plain for stacks_types::rss_stat_event {}
+unsafe impl Plain for stacks_types::blk_io_event {}
+unsafe impl Plain for stacks_types::vfs_io_event {}
+unsafe impl Plain for stacks_types::net_io_event {}
 
 #[cfg(test)]
 pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
@@ -539,20 +539,20 @@ fn to_event<T: Plain>(bytes: &[u8]) -> &T {
 
 #[derive(Debug, Clone)]
 pub(crate) enum Received<'a> {
-    Switch(&'a past_types::switch_event),
-    Profile(&'a past_types::perf_cpu_event),
-    ProcessExec(&'a past_types::process_exec_event),
-    ProcessExit(&'a past_types::process_exit_event),
-    TraceEnter(&'a past_types::tracing_enter_event),
-    TraceExit(&'a past_types::tracing_exit_event),
-    TraceClose(&'a past_types::tracing_close_event),
-    Rss(&'a past_types::rss_stat_event),
-    Block(&'a past_types::blk_io_event),
-    Vfs(&'a past_types::vfs_io_event),
-    UdpRecv(&'a past_types::net_io_event),
-    UdpSend(&'a past_types::net_io_event),
-    TcpRecv(&'a past_types::net_io_event),
-    TcpSend(&'a past_types::net_io_event),
+    Switch(&'a stacks_types::switch_event),
+    Profile(&'a stacks_types::perf_cpu_event),
+    ProcessExec(&'a stacks_types::process_exec_event),
+    ProcessExit(&'a stacks_types::process_exit_event),
+    TraceEnter(&'a stacks_types::tracing_enter_event),
+    TraceExit(&'a stacks_types::tracing_exit_event),
+    TraceClose(&'a stacks_types::tracing_close_event),
+    Rss(&'a stacks_types::rss_stat_event),
+    Block(&'a stacks_types::blk_io_event),
+    Vfs(&'a stacks_types::vfs_io_event),
+    UdpRecv(&'a stacks_types::net_io_event),
+    UdpSend(&'a stacks_types::net_io_event),
+    TcpRecv(&'a stacks_types::net_io_event),
+    TcpSend(&'a stacks_types::net_io_event),
 }
 
 impl<'a> Received<'a> {

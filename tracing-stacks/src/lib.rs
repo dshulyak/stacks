@@ -4,7 +4,7 @@ use tracing_core::span;
 use tracing_subscriber::{prelude::*, Registry};
 
 pub fn init() {
-    let registry = Registry::default().with(PastSubscriber {});
+    let registry = Registry::default().with(StacksSubscriber {});
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global subscriber");
 }
 
@@ -41,9 +41,9 @@ impl Visit for SpanInfo {
     fn record_debug(&mut self, _: &tracing_core::Field, _: &dyn std::fmt::Debug) {}
 }
 
-pub struct PastSubscriber {}
+pub struct StacksSubscriber {}
 
-impl<S> tracing_subscriber::Layer<S> for PastSubscriber
+impl<S> tracing_subscriber::Layer<S> for StacksSubscriber
 where
     S: Subscriber + for<'span> tracing_subscriber::registry::LookupSpan<'span>,
 {
@@ -74,7 +74,7 @@ where
             let extensions = span.extensions();
             let span_info = extensions.get::<SpanInfo>().unwrap();
             probe!(
-                past_tracing,
+                stacks_tracing,
                 enter,
                 span_info.span_id as *const u64,
                 span_info.parent_span_id as *const u64,
@@ -90,9 +90,9 @@ where
             let extensions = span.extensions();
             let span_info = extensions.get::<SpanInfo>().unwrap();
             if span_info.exit_stack {
-                probe!(past_tracing, exit_stack, span_info.span_id as *const u64);
+                probe!(stacks_tracing, exit_stack, span_info.span_id as *const u64);
             } else {
-                probe!(past_tracing, exit, span_info.span_id as *const u64);
+                probe!(stacks_tracing, exit, span_info.span_id as *const u64);
             }
         }
     }
@@ -101,7 +101,7 @@ where
         if let Some(span) = ctx.span(&id) {
             let extensions = span.extensions();
             let span_info = extensions.get::<SpanInfo>().unwrap();
-            probe!(past_tracing, close, span_info.span_id as *const u64,);
+            probe!(stacks_tracing, close, span_info.span_id as *const u64,);
         }
     }
 }

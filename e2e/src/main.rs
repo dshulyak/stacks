@@ -28,8 +28,8 @@ use tracing_subscriber::EnvFilter;
 
 #[derive(Debug, Parser)]
 struct Opt {
-    #[clap(index(1), help = "path to the past binary")]
-    past_binary: PathBuf,
+    #[clap(index(1), help = "path to the stacks binary")]
+    stacks_binary: PathBuf,
     #[clap(index(2), help = "path to the examples binaries used in testinng")]
     examples_binaries: PathBuf,
     #[clap(long, default_value_t = false, help = "print sql output used in validation")]
@@ -64,9 +64,9 @@ fn main() {
         .init();
 
     assert!(
-        CONFIG.past_binary.exists(),
-        "past binary at path {} does not exist",
-        CONFIG.past_binary.display()
+        CONFIG.stacks_binary.exists(),
+        "stacks binary at path {} does not exist",
+        CONFIG.stacks_binary.display()
     );
     assert!(
         CONFIG.example_path(Sleeper::expected_comm()).exists(),
@@ -307,7 +307,7 @@ struct SystemState {
 impl SystemState {
     fn new() -> Self {
         let tempdir = TempDir::with_prefix("e2etrace-test").unwrap();
-        let tracer_process = Command::new(&CONFIG.past_binary)
+        let tracer_process = Command::new(&CONFIG.stacks_binary)
             .arg("--debug-bpf")
             .arg("--dir")
             .arg(tempdir.path())

@@ -24,13 +24,13 @@ jobs:
       - uses: taiki-e/setup-cross-toolchain-action@v1
         with:
           target: ${{ matrix.target }}
-      - run: CLANG=clang-15 cargo install --path=past --root=. --target ${{ matrix.target }}
-      - run: cargo install --path=pastconv --root=. --target ${{ matrix.target }}
+      - run: CLANG=clang-15 cargo install --path=stacks --root=. --target ${{ matrix.target }}
+      - run: cargo install --path=stacksexport --root=. --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
-          name: past-${{ matrix.target }}
-          path: bin/past
+          name: stacks-${{ matrix.target }}
+          path: bin/stacks
       - uses: actions/upload-artifact@v4
         with:
-          name: pastconv-${{ matrix.target }}
-          path: bin/pastconv
+          name: stacksexport-${{ matrix.target }}
+          path: bin/stacksexport
