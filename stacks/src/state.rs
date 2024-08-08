@@ -47,6 +47,7 @@ pub(crate) struct ProcessInfo {
 #[derive(Debug)]
 struct SpanEnter {
     parent_id: u64,
+    span_id: u64,
     id: u64,
     amount: u64,
     name: Bytes,
@@ -141,7 +142,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     buildid: process_info.buildid.clone(),
                     ustack: event.ustack,
                     kstack: event.kstack,
-                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
                     parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
                     trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
@@ -167,7 +168,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         buildid: process_info.buildid.clone(),
                         ustack: event.ustack,
                         kstack: event.kstack,
-                        span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                        span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
                         parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
                         trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                         ..Default::default()
@@ -192,17 +193,14 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: (event.rss * self.page_size) as i64,
                     ustack: event.ustack,
                     kstack: event.kstack,
-                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
                     parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
                     trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
                 });
             }
             Received::TraceEnter(event) => {
-                self.opened_spans
-                    .entry(event.pid)
-                    .or_default()
-                    .push(event.span_id);
+                self.opened_spans.entry(event.pid).or_default().push(event.span_id);
                 let entry = self
                     .tgid_span_id_pid_to_enter
                     .entry((event.tgid, event.span_id, event.pid));
@@ -210,7 +208,8 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     btree_map::Entry::Vacant(vacant) => {
                         vacant.insert(SpanEnter {
                             parent_id: event.parent_id,
-                            id: event.span_id,
+                            span_id: event.span_id,
+                            id: event.id,
                             amount: event.amount,
                             name: Bytes::copy_from_slice(null_terminated(&event.name)),
                             first_enter_ts: event.ts,
@@ -341,6 +340,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", tgid);
                     }
                 };
+                let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
                     ts: (end + self.cfg.timestamp_adjustment) as i64,
                     duration: (end - start) as i64,
@@ -352,6 +352,10 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: *size as i64,
                     ustack: *ustack,
                     kstack: *kstack,
+                    span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
+                    parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                    trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
+                    id: span.map(|s| s.id as i64).unwrap_or_default(),
                     ..Default::default()
                 });
             }
@@ -384,9 +388,10 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: *size as i64,
                     ustack: *ustack,
                     kstack: *kstack,
-                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
                     parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
                     trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
+                    id: span.map(|s| s.id as i64).unwrap_or_default(),
                     ..Default::default()
                 });
             }
@@ -421,9 +426,10 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: *size as i64,
                     ustack: *ustack,
                     kstack: *kstack,
-                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    span_id: span.map(|s| s.span_id as i64).unwrap_or_default(),
                     parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
                     trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
+                    id: span.map(|s| s.id as i64).unwrap_or_default(),
                     ..Default::default()
                 });
             }
