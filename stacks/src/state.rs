@@ -207,7 +207,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     btree_map::Entry::Vacant(vacant) => {
                         vacant.insert(SpanEnter {
                             parent_id: event.parent_id,
-                            id: event.id,
+                            id: event.span_id,
                             amount: event.amount,
                             name: Bytes::copy_from_slice(null_terminated(&event.name)),
                             first_enter_ts: event.ts,

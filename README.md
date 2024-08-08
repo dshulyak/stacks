@@ -11,6 +11,10 @@ as of now it can collect data for the following events:
 all events can be collected with user/kernel stacks and symbolized and generally doesn't require changes in the software.
 one required change might be to compile with `force-frame-pointers=yes`, and it is also beneficial to keep `debug=1`.
 
+additionally, **tracing-stacks** is a basic extension for popular tracing crate.
+if enabled it will label all os events that happened within the span with correct span and span name.
+TODO add an example how it is useful (e.g in pprof or traceviewer) 
+
 the data is collected into parquet files. it can be later exported into
 pprof or chrome traceviewer with **stacksexport** tool or explored with jupyter.
 
