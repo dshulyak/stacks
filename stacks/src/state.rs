@@ -65,7 +65,7 @@ pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
     // opened_spans contain pid -> span_id
     // added on trace_enter, remove on trace_exit
-    opened_spans: HashMap<u32, u64>,
+    opened_spans: HashMap<u32, Vec<u64>>,
     group: Group,
     page_size: u64,
     stats: Stats,
@@ -129,7 +129,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
                 // it means that the span was opened, while the process was context-switched.
                 // such information might be useful to identify issues with async tasks.
-                let span = self.get_open_span(event.tgid, event.pid);
+                let span = self.get_last_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
                     ts: (event.end + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -155,7 +155,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                             anyhow::bail!("missing command for pid {}", event.tgid);
                         }
                     };
-                    let span = self.get_open_span(event.tgid, event.pid);
+                    let span = self.get_last_open_span(event.tgid, event.pid);
                     self.group.save_event(Event {
                         ts: (event.timestamp + self.cfg.timestamp_adjustment) as i64,
                         duration: self.cfg.perf_event_frequency,
@@ -181,7 +181,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
-                let span = self.get_open_span(event.tgid, event.pid);
+                let span = self.get_last_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
                     ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -199,7 +199,10 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 });
             }
             Received::TraceEnter(event) => {
-                self.opened_spans.insert(event.pid, event.span_id);
+                self.opened_spans
+                    .entry(event.pid)
+                    .or_default()
+                    .push(event.span_id);
                 let entry = self
                     .tgid_span_id_pid_to_enter
                     .entry((event.tgid, event.span_id, event.pid));
@@ -221,7 +224,20 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
             }
             Received::TraceExit(event) => {
-                self.opened_spans.remove(&event.pid);
+                let spans = self.opened_spans.get_mut(&event.pid);
+                match spans {
+                    Some(spans) => {
+                        if let Some(last) = spans.pop() {
+                            if last != event.span_id {
+                                warn!("span_id mismatch for pid {}", event.pid);
+                                spans.clear();
+                            }
+                        }
+                    }
+                    None => {
+                        warn!("missing span for pid {}", event.pid);
+                    }
+                }
                 let process_info = match self.tgid_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
@@ -357,7 +373,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", tgid);
                     }
                 };
-                let span = self.get_open_span(*tgid, *pid);
+                let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -394,7 +410,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", tgid);
                     }
                 };
-                let span = self.get_open_span(*tgid, *pid);
+                let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -520,9 +536,10 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         Ok(())
     }
 
-    fn get_open_span(&self, tgid: u32, pid: u32) -> Option<&SpanEnter> {
+    fn get_last_open_span(&self, tgid: u32, pid: u32) -> Option<&SpanEnter> {
         self.opened_spans
             .get(&pid)
+            .and_then(|spans| spans.last())
             .and_then(|span_id| self.tgid_span_id_pid_to_enter.get(&(tgid, *span_id, pid)))
     }
 }
