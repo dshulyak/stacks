@@ -349,10 +349,12 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 let net_io_event {
                     r#type: _,
                     tgid,
+                    pid,
                     ts,
                     size,
                     ustack,
                     kstack,
+                    __pad_12,
                 } = event;
                 let process_info = match self.tgid_process_info.get(tgid) {
                     Some(command) => command,
@@ -364,6 +366,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
                     tgid: *tgid as i32,
+                    pid: *pid as i32,
                     command: process_info.command.clone(),
                     buildid: process_info.buildid.clone(),
                     amount: *size as i64,

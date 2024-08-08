@@ -140,6 +140,7 @@ struct net_io_event
 {
     __u8 type;
     __u32 tgid;
+    __u32 pid;
     __u64 ts;
     __u64 size;
     __s32 ustack;
