@@ -257,6 +257,7 @@ struct recorded_blk_io_start
 {
     __u64 ts;
     __u32 tgid;
+    __u32 pid;
     __u64 size;
     __s32 kstack;
     __s32 ustack;
@@ -544,6 +545,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
+    pid_t pid = __pid_tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
@@ -588,6 +590,7 @@ int handle__mm_trace_rss_stat(u64 *ctx)
     event->type = TYPE_RSS_STAT_EVENT;
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
+    event->pid = pid;
     event->rss = rss;
     if (cfg.rss_ustack)
     {
@@ -614,7 +617,7 @@ int BPF_PROG(block_io_start, struct request *rq)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
-
+    pid_t pid = __pid_tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
@@ -622,6 +625,7 @@ int BPF_PROG(block_io_start, struct request *rq)
     struct recorded_blk_io_start recorded = {
         .ts = bpf_ktime_get_ns(),
         .tgid = tgid,
+        .pid = pid,
         .size = BPF_CORE_READ(rq, __data_len),
     };
     if (cfg.blk_ustack)
@@ -663,6 +667,7 @@ int BPF_PROG(block_io_done, struct request *rq)
     event->type = TYPE_BLK_IO_EVENT;
     event->rw = (BPF_CORE_READ(rq, cmd_flags) & REQ_OP_MASK) == REQ_OP_WRITE;
     event->tgid = recorded->tgid;
+    event->pid = recorded->pid;
     event->start = recorded->ts;
     event->end = bpf_ktime_get_ns();
     event->size = recorded->size;
@@ -676,6 +681,7 @@ __always_inline int on_vfs_event(u64 *ctx, __u8 rw)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
+    pid_t pid = __pid_tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
@@ -689,6 +695,7 @@ __always_inline int on_vfs_event(u64 *ctx, __u8 rw)
     event->type = TYPE_VFS_IO_EVENT;
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
+    event->pid = pid;
     event->size = (__u64)ctx[2];
     event->rw = rw;
     if (cfg.vfs_ustack)

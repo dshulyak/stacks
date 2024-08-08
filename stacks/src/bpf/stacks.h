@@ -107,6 +107,7 @@ struct rss_stat_event
 {
     __u8 type;
     __u32 tgid;
+    __u32 pid;
     __u64 ts;
     __u64 rss;
     __s32 ustack;
@@ -118,6 +119,7 @@ struct blk_io_event
     __u8 type;
     __u8 rw;
     __u32 tgid;
+    __u32 pid;
     __u64 start;
     __u64 end;
     __u64 size;
@@ -130,6 +132,7 @@ struct vfs_io_event
     __u8 type;
     __u8 rw;
     __u32 tgid;
+    __u32 pid;
     __u64 ts;
     __u64 size;
     __s32 ustack;
