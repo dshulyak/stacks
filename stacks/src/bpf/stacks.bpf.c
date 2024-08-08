@@ -614,7 +614,7 @@ int BPF_PROG(block_io_start, struct request *rq)
 {
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
-    
+
     if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
@@ -672,7 +672,8 @@ int BPF_PROG(block_io_done, struct request *rq)
     return 0;
 }
 
-__always_inline int on_vfs_event(u64 *ctx, __u8 rw) {
+__always_inline int on_vfs_event(u64 *ctx, __u8 rw)
+{
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
     if (apply_tgid_filter(tgid) > 0)
@@ -707,37 +708,42 @@ __always_inline int on_vfs_event(u64 *ctx, __u8 rw) {
         event->kstack = -1;
     }
     submit_event(event);
-	return 0;
+    return 0;
 }
 
 SEC("fentry/vfs_read")
 int vfs_read(u64 *ctx)
 {
-	return on_vfs_event(ctx, 0);
+    return on_vfs_event(ctx, 0);
 }
 
 SEC("fentry/vfs_readv")
 int vfs_readv(u64 *ctx)
 {
-	return on_vfs_event(ctx, 0);
+    return on_vfs_event(ctx, 0);
 }
 
 SEC("fentry/vfs_write")
 int vfs_write(u64 *ctx)
 {
-	return on_vfs_event(ctx, 1);
+    return on_vfs_event(ctx, 1);
 }
 
 SEC("fentry/vfs_writev")
 int vfs_writev(u64 *ctx)
 {
-	return on_vfs_event(ctx, 1);
+    return on_vfs_event(ctx, 1);
 }
 
-__always_inline int on_net_event(u64 *ctx, __u8 type) 
+__always_inline int on_net_event(u64 *ctx, __u8 type, int size)
 {
+    if (size < 0)
+    {
+        return 0;
+    }
     u64 __pid_tgid = bpf_get_current_pid_tgid();
     gid_t tgid = __pid_tgid >> 32;
+    pid_t pid = __pid_tgid;
     if (apply_tgid_filter(tgid) > 0)
     {
         return 0;
@@ -751,7 +757,8 @@ __always_inline int on_net_event(u64 *ctx, __u8 type)
     event->type = type;
     event->ts = bpf_ktime_get_ns();
     event->tgid = tgid;
-    event->size = (__u64)ctx[2];
+    event->pid = pid;
+    event->size = size;
     if (cfg.net_ustack)
     {
         event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
@@ -772,28 +779,28 @@ __always_inline int on_net_event(u64 *ctx, __u8 type)
     return 0;
 }
 
-SEC("fentry/udp_recvmsg")
+SEC("fexit/udp_recvmsg")
 int udp_recvmsg(u64 *ctx)
 {
-    return on_net_event(ctx, TYPE_UDP_RECV_EVENT);
-}   
+    return on_net_event(ctx, TYPE_UDP_RECV_EVENT, ctx[5]);
+}
 
-SEC("fentry/udp_sendmsg")
+SEC("fexit/udp_sendmsg")
 int udp_sendmsg(u64 *ctx)
 {
-    return on_net_event(ctx, TYPE_UDP_SEND_EVENT);
+    return on_net_event(ctx, TYPE_UDP_SEND_EVENT, ctx[3]);
 }
 
-SEC("fentry/tcp_recvmsg")
+SEC("fexit/tcp_recvmsg")
 int tcp_recvmsg(u64 *ctx)
 {
-    return on_net_event(ctx, TYPE_TCP_RECV_EVENT);
+    return on_net_event(ctx, TYPE_TCP_RECV_EVENT, ctx[5]);
 }
 
-SEC("fentry/tcp_sendmsg")
+SEC("fexit/tcp_sendmsg")
 int tcp_sendmsg(u64 *ctx)
 {
-    return on_net_event(ctx, TYPE_TCP_SEND_EVENT);
+    return on_net_event(ctx, TYPE_TCP_SEND_EVENT, ctx[3]);
 }
 
 // cargo libbpf doesn't generate bindings without definitions
