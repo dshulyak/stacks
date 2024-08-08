@@ -63,6 +63,9 @@ pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
     symbolizer_tgid_cleanup: HashSet<u32>,
     tgid_process_info: HashMap<u32, ProcessInfo>,
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
+    // opened_spans contain pid -> span_id
+    // added on trace_enter, remove on trace_exit
+    opened_spans: HashMap<u32, u64>,
     group: Group,
     page_size: u64,
     stats: Stats,
@@ -94,6 +97,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             symbolizer_tgid_cleanup: HashSet::new(),
             tgid_process_info: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
+            opened_spans: HashMap::new(),
             group,
             page_size,
             stats,
@@ -106,6 +110,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         }
         self.tgid_process_info.clear();
         self.tgid_span_id_pid_to_enter.clear();
+        self.opened_spans.clear();
         self.symbolizer_tgid_cleanup.clear();
         Ok(())
     }
@@ -122,6 +127,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
+                // it means that the span was opened, while the process was context-switched.
+                // such information might be useful to identify issues with async tasks.
+                let span = self.get_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
                     ts: (event.end + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -133,6 +141,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     buildid: process_info.buildid.clone(),
                     ustack: event.ustack,
                     kstack: event.kstack,
+                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                    trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
                 });
             }
@@ -144,6 +155,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                             anyhow::bail!("missing command for pid {}", event.tgid);
                         }
                     };
+                    let span = self.get_open_span(event.tgid, event.pid);
                     self.group.save_event(Event {
                         ts: (event.timestamp + self.cfg.timestamp_adjustment) as i64,
                         duration: self.cfg.perf_event_frequency,
@@ -155,6 +167,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         buildid: process_info.buildid.clone(),
                         ustack: event.ustack,
                         kstack: event.kstack,
+                        span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                        parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                        trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                         ..Default::default()
                     });
                 };
@@ -166,6 +181,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", event.tgid);
                     }
                 };
+                let span = self.get_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
                     ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -176,10 +192,14 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: (event.rss * self.page_size) as i64,
                     ustack: event.ustack,
                     kstack: event.kstack,
+                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                    trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
                 });
             }
             Received::TraceEnter(event) => {
+                self.opened_spans.insert(event.pid, event.span_id);
                 let entry = self
                     .tgid_span_id_pid_to_enter
                     .entry((event.tgid, event.span_id, event.pid));
@@ -201,6 +221,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 };
             }
             Received::TraceExit(event) => {
+                self.opened_spans.remove(&event.pid);
                 let process_info = match self.tgid_process_info.get(&event.tgid) {
                     Some(command) => command,
                     None => {
@@ -336,6 +357,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", tgid);
                     }
                 };
+                let span = self.get_open_span(*tgid, *pid);
                 self.group.save_event(Event {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -346,6 +368,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: *size as i64,
                     ustack: *ustack,
                     kstack: *kstack,
+                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                    trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
                 });
             }
@@ -369,6 +394,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         anyhow::bail!("missing command for pid {}", tgid);
                     }
                 };
+                let span = self.get_open_span(*tgid, *pid);
                 self.group.save_event(Event {
                     ts: (*ts + self.cfg.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
@@ -379,6 +405,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: *size as i64,
                     ustack: *ustack,
                     kstack: *kstack,
+                    span_id: span.map(|s| s.id as i64).unwrap_or_default(),
+                    parent_id: span.map(|s| s.parent_id as i64).unwrap_or_default(),
+                    trace_name: span.map(|s| s.name.clone()).unwrap_or_default(),
                     ..Default::default()
                 });
             }
@@ -489,6 +518,12 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             )?;
         }
         Ok(())
+    }
+
+    fn get_open_span(&self, tgid: u32, pid: u32) -> Option<&SpanEnter> {
+        self.opened_spans
+            .get(&pid)
+            .and_then(|span_id| self.tgid_span_id_pid_to_enter.get(&(tgid, *span_id, pid)))
     }
 }
 
