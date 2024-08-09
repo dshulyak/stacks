@@ -3,6 +3,8 @@ use std::{
     time::Duration,
 };
 
+use clap::Parser;
+
 struct Locker {
     lock: std::sync::Mutex<i32>,
 }
@@ -21,13 +23,15 @@ impl Locker {
     }
 }
 
+#[derive(Debug, Parser)]
+struct Opt {
+    #[clap(short, long, default_value = "1000", help = "sleep duration in milliseconds")]
+    duration: u64,
+}
+
 fn main() {
-    let args = std::env::args().collect::<Vec<String>>();
-    let sleep_duration = if args.len() > 1 {
-        Duration::from_millis(args[1].parse().unwrap())
-    } else {
-        Duration::from_secs(1)
-    };
+    let opt = Opt::parse();
+    let sleep_duration = Duration::from_millis(opt.duration);
 
     let state = &Locker::new();
     scope(|s| {

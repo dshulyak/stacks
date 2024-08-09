@@ -26,14 +26,15 @@ jobs:
           sudo ln -s /usr/include/asm-generic /usr/include/asm
           sudo rm -f /bin/clang
           sudo ln -s /usr/bin/clang-15 /bin/clang
-      - name: cargo test
-        run: cargo test --profile=${{ matrix.profile }} --locked
+      - uses: Swatinem/rust-cache@v2
       - name: cargo build
-        run: CLANG=clang-15 cargo build --bins --examples --profile=${{ matrix.profile }} --locked
-      - name: e2e test (runs with sudo)
+        run: CLANG=clang-15 cargo build --bins --examples --profile=${{ matrix.profile }} --locked --verbose
+      - name: cargo test
+        run: cargo test -p stacks --profile=${{ matrix.profile }} --locked --verbose
+      - name: e2e test (should run as root)
         run: |
           if [ "${{ matrix.profile }}" = "dev" ]; then
-            sudo RUST_LOG="stacks=debug,e2e=debug" ./target/debug/e2e ./target/debug/stacks ./target/debug/examples
+            cd e2e && RUST_LOG="stacks=debug" cargo test --profile=${{ matrix.profile }} --locked
           else
             echo "Error: Profile '${{ matrix.profile }}' is not expected."
             exit 1

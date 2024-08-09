@@ -7,17 +7,11 @@ edition = "2021"
 tracing = "0.1.40"
 tracing-stacks = { path = "../tracing-stacks" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-proptest = "1.4.0"
-proptest-state-machine = "0.3.0"
 datafusion = "38.0.0"
 tempfile = "3.10.1"
 tokio = { version = "1.38.0", features = ["full"] }
-nix = { version = "0.29.0", features = ["signal"] }
-itertools = "0.13.0"
 clap = { version = "4.5.7", features = ["derive"] }
 once_cell = "1.19.0"
-axum = "0.7.5"
-serde = { version = "1.0.203", features = ["derive"] }
 anyhow = "1.0.86"
-sha2 = "0.10.8"
-
+libc = "0.2.155"
+serial_test = "3.1.1"
