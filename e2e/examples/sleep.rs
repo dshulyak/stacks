@@ -1,31 +1,27 @@
 use std::{
-    env,
-    ffi::OsString,
-    str::FromStr,
     thread::{scope, sleep},
     time::Duration,
 };
 
+use clap::Parser;
 use tracing::span;
 
+#[derive(Debug, Parser)]
+struct Opt {
+    #[clap(short, long, default_value = "10")]
+    threads: usize,
+    #[clap(short, long, default_value = "1")]
+    loops: usize,
+    #[clap(short, long, default_value = "1000")]
+    duration: u64,
+}
+
 fn main() {
-    // execute syscall in rust
-    let args: Vec<OsString> = env::args_os().collect();
-    let threads = if args.len() > 1 {
-        os_string_to_usize(&args[1])
-    } else {
-        10
-    };
-    let loops = if args.len() > 2 {
-        os_string_to_usize(&args[2])
-    } else {
-        1
-    };
-    let duration = if args.len() > 3 {
-        os_string_to_usize(&args[3]) as u64
-    } else {
-        1000
-    };
+    let opt = Opt::parse();
+    let threads = opt.threads;
+    let loops = opt.loops;
+    let duration = opt.duration;
+
     scope(|s| {
         let span = span!(tracing::Level::INFO, "sleep");
         for _ in 0..threads {
@@ -38,8 +34,4 @@ fn main() {
             });
         }
     });
-}
-
-fn os_string_to_usize(os_string: &OsString) -> usize {
-    usize::from_str(os_string.to_str().expect("not a valid unicode")).expect("not a number")
 }
