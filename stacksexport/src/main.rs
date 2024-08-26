@@ -52,6 +52,12 @@ enum Command {
         query_file: PathBuf,
         #[clap(short, long, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
         command: Option<String>,
+        #[clap(
+            short,
+            long,
+            help = "include offset after the symbol name. it can be useful to avoid cycles in pprof"
+        )]
+        offset: bool,
     },
     #[clap(about = r#"generate traces from a list of queries. 
     EXAMPLES:
@@ -83,11 +89,12 @@ async fn main() -> Result<()> {
             command,
             query_file,
             binary,
+            offset,
         } => {
             ensure_dir(&PathBuf::from(&opt.directory))?;
             let destination = next_file(&PathBuf::from(&opt.directory), "pprof", "pprof")?;
             let query = std::fs::read_to_string(query_file)?;
-            pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary).await?;
+            pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary, offset).await?;
             info!("pprof is exported to {}", destination.display());
             if !opt.no_open {
                 open_pprof(&destination).with_context(|| format!("pprof {}", destination.display()))?;
