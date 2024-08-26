@@ -30,7 +30,7 @@ mod proto {
 const COMMAND_BINDING: &str = "?command";
 const BUILID_BINDING: &str = "?buildid";
 
-async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Profile> {
+async fn generate_pprof(ctx: &SessionContext, query: &str, include_offset: bool) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
     let mut strings = PprofStringDictionary::new_strings();
     let mut functions = PprofStringDictionary::new_functions();
@@ -44,7 +44,11 @@ async fn generate_pprof(ctx: &SessionContext, query: &str) -> Result<proto::Prof
             // if we have line information we will see the difference by looking at source.
             // without binary/debuginfo there is no clear way to see that samples are actually
             // collected from different addresses, for this purpose i am adding offset to the name explicitly
-            let name = format!("{}-{:x}", stack.name, stack.offset);
+            let name = if include_offset {
+                format!("{}-{:x}", stack.name, stack.offset)
+            } else {
+                stack.name.to_string()
+            };
             match functions.get_or_insert(name.as_str()) {
                 DictionaryEntry::Existing(function_id) => locations.push(function_id as u64),
                 DictionaryEntry::New(function_id) => {
@@ -101,6 +105,7 @@ async fn generate_pprof_with_symbolization(
     ctx: &SessionContext,
     query: &str,
     binary: PathBuf,
+    include_offset: bool,
 ) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
     let columns: Vec<String> = batch.0[0]
@@ -135,7 +140,11 @@ async fn generate_pprof_with_symbolization(
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
         for (stack, symbolized) in multizip((stacks.iter(), symbolized)) {
-            let fname = format!("{}-{:x}", stack.name, stack.offset);
+            let fname = if include_offset {
+                format!("{}-{:x}", stack.name, stack.offset)
+            } else {
+                stack.name.to_string()
+            };
             let function_id = match functions.get_or_insert(&fname) {
                 DictionaryEntry::Existing(function_id) => function_id,
                 DictionaryEntry::New(function_id) => {
@@ -347,6 +356,7 @@ pub(crate) async fn pprof(
     query: &str,
     command: Option<&str>,
     binary: Option<PathBuf>,
+    include_offset: bool,
 ) -> Result<()> {
     let mut query = query.to_owned();
     if let Some(command) = command {
@@ -365,9 +375,9 @@ pub(crate) async fn pprof(
     let ctx = session(register).await?;
 
     let profile = if let Some(binary) = binary {
-        generate_pprof_with_symbolization(&ctx, &query, binary).await?
+        generate_pprof_with_symbolization(&ctx, &query, binary, include_offset).await?
     } else {
-        generate_pprof(&ctx, &query).await?
+        generate_pprof(&ctx, &query, include_offset).await?
     };
     let mut f = std::fs::File::create(destination)?;
     let mut buf = vec![];
