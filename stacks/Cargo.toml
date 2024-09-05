@@ -23,7 +23,7 @@ plain = "0.2"
 tracing = "0.1.40"
 tracing-stacks = { path = "../tracing-stacks" }
 tracing-subscriber = { version = "0.3.18", features = ["env-filter"] }
-clap = { version = "4.5.4", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive", "string"] }
 blazesym = { git = "https://github.com/dshulyak/blazesym.git", branch = "v0.2.0-alpha.12-caching" }
 humantime = "2.1"
 bytemuck = "1.16.1"
