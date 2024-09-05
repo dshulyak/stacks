@@ -17,14 +17,14 @@ jobs:
         uses: ./.github/workflows/build.yml
         secrets: inherit
     release:
-        runs-on: ubuntu-22.04
+        runs-on: ubuntu-latest
         needs: [build, test]
         steps:
             - 
-                name: Download the artifacts
+                name: download artifacts
                 uses: actions/download-artifact@v4
             - 
-                name: Create Release
+                name: create Release
                 uses: actions/create-release@v1
                 id: create_release
                 env:
@@ -34,24 +34,16 @@ jobs:
                     release_name: Release ${{ github.ref_name }} 
                     draft: false
                     prerelease: true
-            - 
-                name: upload stacks x86_64
-                uses: actions/upload-release-asset@v1
-                env:
-                    GITHUB_TOKEN: ${{ github.token }}
-                with:
-                    upload_url: ${{ steps.create_release.outputs.upload_url }}
-                    asset_path: stacks-x86_64-unknown-linux-gnu/stacks
-                    asset_name: stacks-x86_64-unknown-linux-gnu     
-                    asset_content_type: application/octet-stream
-            - 
-                name: upload stacksexport x86_64
-                uses: actions/upload-release-asset@v1
-                env:
-                    GITHUB_TOKEN: ${{ github.token }}
-                with:
-                    upload_url: ${{ steps.create_release.outputs.upload_url }}
-                    asset_path: stacks-x86_64-unknown-linux-gnu/stacksexport
-                    asset_name: stacks-x86_64-unknown-linux-gnu     
-                    asset_content_type: application/octet-stream
+            - name: archive binary
+              run: tar -czvf stacks-x86_64-unknown-linux-gnu.tar.gz stacks-x86_64-unknown-linux-gnu/stacks
+              
+            - name: upload stacks binary
+              uses: actions/upload-release-asset@v1
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                upload_url: ${{ steps.create_release.outputs.upload_url }}
+                asset_path: ./stacks-x86_64-unknown-linux-gnu.tar.gz
+                asset_name: stacks-x86_64-unknown-linux-gnu.tar.gz
+                asset_content_type: application/gzip
     
