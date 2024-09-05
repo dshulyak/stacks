@@ -7,7 +7,7 @@ on:
 jobs:
   build:
     name: Build
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         target: [
@@ -25,12 +25,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
       - run: CLANG=clang-15 cargo install --path=stacks --root=. --target ${{ matrix.target }}
-      - run: cargo install --path=stacksexport --root=. --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v4
         with:
           name: stacks-${{ matrix.target }}
           path: bin/stacks
-      - uses: actions/upload-artifact@v4
-        with:
-          name: stacksexport-${{ matrix.target }}
-          path: bin/stacksexport
