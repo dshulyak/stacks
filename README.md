@@ -38,17 +38,62 @@ cargo install --path stacks
 cargo install --path stacksexport
 ```
 
-By default tool will collect profile at 99hz, rss changes with user traces and kernel switches with kernel traces.
+For example i will collect stacks from running stacks, code and firefox commands. The command below will be doing
+collecting user stacks at 99hz rate, user stacks every 29th rss growth event, kernel and user stack for cpu switch event
+and user/kernel stacks for write/read from block device. 
+
 ```sh
-sudo stacks --help
+sudo ./target/release-debug/stacks stacks code firefox -p profile:u:99,rss:u:29,switch:uk,block:uk
 ```
 
-To open pprof install [pprof tool](https://github.com/google/pprof).
+After collecting data it can be viewed with stacksexport, also make to install [pprof](https://github.com/google/pprof).
+
+### profile
+
 ```sh
-stacksexport pprof --help
+stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/cpu_ustacks_for_buildid.sql
 ```
 
-And to open trace viewer follow these [instructions](https://chromium.googlesource.com/catapult/+/refs/heads/main/tracing/README.md) .
+![Profile Stacks](./_assets/profile_stacks.png "Profile Stacks Image")
+
+By providing `-b ./target/release-debug/stacks` to stacksexport it is also possible to extend collected data
+with source code information for nicer UX.
+
+![Code](./_assets/code_stacks.png)
+
+### rss
+
 ```sh
-stacksexport trace --help
+stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/rss_ustacks_growth_for_buildid.sql
 ```
+
+One important detail about rss is that events will be captured when program request memory pages from os,
+so for example it will show rss growth when vector is initialized, but will show when element is written.
+
+![Rss stacks](./_assets/rss_stacks.png)
+
+### offcpu
+
+```sh
+stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/offcpu_stacks_for_buildid.sql
+```
+
+Offcpu events capture last stack traces before thread was switched off by scheduler,
+in this profile program waits for ring buffer events in epoll.
+
+![Offcpu stacks](./_assets/offcpu_stacks.png)
+
+### block
+
+There are two different profiles for block operations, by amount and duration.
+And it is possible to generate different profiles for blk_read and blk_write (see queries).
+
+```sh
+stacksexport pprof -b ./target/debug/examples/writer ./stacksexport/sql/pprof/blk_ustack_duration_for_buildid.sql
+stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/blk_ustack_amount_for_buildid.sql
+```
+
+This is not a particularly interesting example, capture from e2e/examples/writer with fsync after each write.
+
+![Block stacks](./_assets/block_writer.png)
+
