@@ -1,7 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashSet,
-    fs,
+    env, fs,
     io::Read,
     path::{Path, PathBuf},
     sync::{
@@ -41,6 +41,28 @@ mod tests;
 
 const DEFAULT_PROGRAMS: &str = "profile:u:99,rss:u:29,switch:k";
 
+fn default_path() -> PathBuf {
+    let dir_wo_index = env::temp_dir().join("stacks");
+    // go over all subdirectories, try to parse them as numbers pick 0 or last + 1
+    let mut next = 0;
+    if let Ok(entries) = fs::read_dir(&dir_wo_index) {
+        for entry in entries {
+            let entry = entry.expect("unable to read entry");
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name() {
+                    if let Some(name) = name.to_str() {
+                        if let Ok(index) = name.parse::<u32>() {
+                            next = next.max(index + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    dir_wo_index.join(next.to_string())
+}
+
 #[derive(Debug, Parser)]
 struct Opt {
     #[clap(
@@ -49,7 +71,7 @@ struct Opt {
     )]
     commands: Vec<String>,
 
-    #[clap(short, long, default_value = "/tmp/stacks/")]
+    #[clap(short, long, default_value = default_path().into_os_string())]
     dir: PathBuf,
 
     #[clap(long, default_value = "STACKS")]

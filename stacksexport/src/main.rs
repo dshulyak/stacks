@@ -1,4 +1,4 @@
-use std::{path::PathBuf, str};
+use std::{env, fs, path::PathBuf, str};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -9,11 +9,32 @@ mod common;
 mod pprof;
 mod trace;
 
+fn default_register_path() -> PathBuf {
+    let dir_wo_index = env::temp_dir().join("stacks");
+    let mut next = 0;
+    if let Ok(entries) = fs::read_dir(&dir_wo_index) {
+        for entry in entries {
+            let entry = entry.expect("unable to read entry");
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(name) = path.file_name() {
+                    if let Some(name) = name.to_str() {
+                        if let Ok(index) = name.parse::<u32>() {
+                            next = next.max(index);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    dir_wo_index.join(next.to_string())
+}
+
 #[derive(Parser)]
 struct Opt {
     #[clap(subcommand)]
     cmd: Command,
-    #[clap(short, long, global = true, default_value = "/tmp/stacks/STACKS-*.parquet")]
+    #[clap(short, long, global = true, default_value = default_register_path().into_os_string())]
     register: String,
     #[clap(short, long, global = true, help = "print version and exit")]
     version: bool,
