@@ -9,7 +9,7 @@ use std::{
 use anyhow::Result;
 use blazesym::{
     helper::read_elf_build_id,
-    symbolize::{self, Elf, Input, Source, Symbolized},
+    symbolize::{self, CodeInfo, Elf, Input, Source, Symbolized},
 };
 use datafusion::{
     arrow::{
@@ -106,6 +106,7 @@ async fn generate_pprof_with_symbolization(
     query: &str,
     binary: PathBuf,
     include_offset: bool,
+    add_inlined: bool,
 ) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
     let columns: Vec<String> = batch.0[0]
@@ -140,35 +141,23 @@ async fn generate_pprof_with_symbolization(
             .collect::<Vec<u64>>();
         let symbolized = symbolizer.symbolize(&source, Input::FileOffset(addresses_with_offset.as_slice()))?;
         for (stack, symbolized) in multizip((stacks.iter(), symbolized)) {
-            let fname = if include_offset {
-                format!("{}-{:x}", stack.name, stack.offset)
-            } else {
-                stack.name.to_string()
-            };
-            let function_id = match functions.get_or_insert(&fname) {
-                DictionaryEntry::Existing(function_id) => function_id,
-                DictionaryEntry::New(function_id) => {
-                    let mut function = proto::Function {
-                        id: function_id as u64,
-                        name: *strings.get_or_insert(&fname),
-                        ..Default::default()
-                    };
-                    if let Symbolized::Sym(sym) = &symbolized {
-                        if let Some(code_info) = &sym.code_info {
-                            if let Some(path) = code_info.to_path().as_os_str().to_str() {
-                                function.filename = *strings.get_or_insert(path);
-                            }
-                        }
-                    }
-                    function_table.push(function);
-                    function_id
-                }
-            };
             match location_addr_to_index.entry(stack.address + stack.offset) {
                 hash_map::Entry::Occupied(entry) => {
                     locations.push(*entry.get() as u64);
                 }
                 hash_map::Entry::Vacant(entry) => {
+                    let full_name = if include_offset {
+                        format!("{}-{:x}", stack.name, stack.offset)
+                    } else {
+                        stack.name.to_string()
+                    };
+                    let code_info = match &symbolized {
+                        Symbolized::Sym(sym) => sym.code_info.as_ref(),
+                        Symbolized::Unknown(_) => None,
+                    };
+                    let function_id =
+                        handle_function_name(&mut functions, &mut strings, &mut function_table, &full_name, code_info);
+                    let mut lines = vec![];
                     let mut line = proto::Line {
                         function_id: function_id as u64,
                         ..Default::default()
@@ -182,11 +171,29 @@ async fn generate_pprof_with_symbolization(
                                 line.column = column as i64;
                             }
                         }
+                        if add_inlined {
+                            for line in sym.inlined.iter().rev() {
+                                let inlined_function_id = handle_function_name(
+                                    &mut functions,
+                                    &mut strings,
+                                    &mut function_table,
+                                    &line.name,
+                                    line.code_info.as_ref(),
+                                );
+                                let inlined_line = proto::Line {
+                                    function_id: inlined_function_id as u64,
+                                    line: line.code_info.as_ref().map_or(0, |info| info.line.unwrap_or(0)) as i64,
+                                    column: line.code_info.as_ref().map_or(0, |info| info.column.unwrap_or(0)) as i64,
+                                };
+                                lines.push(inlined_line);
+                            }
+                        }
                     }
+                    lines.push(line);
                     let location = proto::Location {
                         id: last_location as u64,
                         address: stack.address + stack.offset,
-                        line: vec![line],
+                        line: lines,
                         ..Default::default()
                     };
                     location_table.push(location);
@@ -222,6 +229,33 @@ async fn generate_pprof_with_symbolization(
         ..Default::default()
     };
     Ok(profile)
+}
+
+fn handle_function_name(
+    functions_string_dict: &mut PprofStringDictionary,
+    all_strings_dictionary: &mut PprofStringDictionary,
+    functions_table: &mut Vec<proto::Function>,
+    full_name: &str,
+    code_info: Option<&CodeInfo<'_>>,
+) -> i64 {
+    match functions_string_dict.get_or_insert(full_name) {
+        DictionaryEntry::Existing(function_id) => function_id,
+        DictionaryEntry::New(function_id) => {
+            let mut function = proto::Function {
+                id: function_id as u64,
+                name: *all_strings_dictionary.get_or_insert(full_name),
+                ..Default::default()
+            };
+            if let Some(code_info) = code_info {
+                if let Some(path) = code_info.to_path().as_os_str().to_str() {
+                    function.filename = *all_strings_dictionary.get_or_insert(path);
+                }
+            }
+
+            functions_table.push(function);
+            function_id
+        }
+    }
 }
 
 struct Batch(Vec<RecordBatch>);
@@ -357,6 +391,7 @@ pub(crate) async fn pprof(
     command: Option<&str>,
     binary: Option<PathBuf>,
     include_offset: bool,
+    inlined: bool,
 ) -> Result<()> {
     let mut query = query.to_owned();
     if let Some(command) = command {
@@ -375,7 +410,7 @@ pub(crate) async fn pprof(
     let ctx = session(register).await?;
 
     let profile = if let Some(binary) = binary {
-        generate_pprof_with_symbolization(&ctx, &query, binary, include_offset).await?
+        generate_pprof_with_symbolization(&ctx, &query, binary, include_offset, inlined).await?
     } else {
         generate_pprof(&ctx, &query, include_offset).await?
     };
