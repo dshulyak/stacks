@@ -34,9 +34,9 @@ jobs:
                     release_name: Release ${{ github.ref_name }} 
                     draft: false
                     prerelease: true
-            - name: archive binary
+
+            - name: archive stacks binary
               run: tar -czvf stacks-x86_64-unknown-linux-gnu.tar.gz stacks-x86_64-unknown-linux-gnu/stacks
-              
             - name: upload stacks binary
               uses: actions/upload-release-asset@v1
               env:
@@ -45,5 +45,17 @@ jobs:
                 upload_url: ${{ steps.create_release.outputs.upload_url }}
                 asset_path: ./stacks-x86_64-unknown-linux-gnu.tar.gz
                 asset_name: stacks-x86_64-unknown-linux-gnu.tar.gz
+                asset_content_type: application/gzip
+
+            - name: archive stacksexport binary
+              run: tar -czvf stacksexport-x86_64-unknown-linux-gnu.tar.gz stacksexport-x86_64-unknown-linux-gnu/stacksexport
+            - name: upload stacksexport binary
+              uses: actions/upload-release-asset@v1
+              env:
+                GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              with:
+                upload_url: ${{ steps.create_release.outputs.upload_url }}
+                asset_path: ./stacksexport-x86_64-unknown-linux-gnu.tar.gz
+                asset_name: stacksexport-x86_64-unknown-linux-gnu.tar.gz
                 asset_content_type: application/gzip
     
