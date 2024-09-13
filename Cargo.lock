@@ -3185,7 +3185,6 @@ dependencies = [
  "tracing",
  "tracing-core",
  "tracing-subscriber",
- "version_check",
 ]
 
 [[package]]
