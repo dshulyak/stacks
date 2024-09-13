@@ -69,6 +69,13 @@ enum Command {
     Pprof {
         #[clap(short, long, help = "path to the binary file")]
         binary: Option<PathBuf>,
+        #[clap(
+            short,
+            long,
+            help = "include inlined functions in the profile. inlined option works only if binary is provided",
+            requires = "binary"
+        )]
+        inlined: bool,
         #[clap(index = 1, help = "file with sql query")]
         query_file: PathBuf,
         #[clap(short, long, help = "name of the process, as it is recorded in /proce/<pid>/comm")]
@@ -111,11 +118,21 @@ async fn main() -> Result<()> {
             query_file,
             binary,
             offset,
+            inlined,
         } => {
             ensure_dir(&PathBuf::from(&opt.directory))?;
             let destination = next_file(&PathBuf::from(&opt.directory), "pprof", "pprof")?;
             let query = std::fs::read_to_string(query_file)?;
-            pprof::pprof(&opt.register, &destination, &query, command.as_deref(), binary, offset).await?;
+            pprof::pprof(
+                &opt.register,
+                &destination,
+                &query,
+                command.as_deref(),
+                binary,
+                offset,
+                inlined,
+            )
+            .await?;
             info!("pprof is exported to {}", destination.display());
             if !opt.no_open {
                 open_pprof(&destination).with_context(|| format!("pprof {}", destination.display()))?;
