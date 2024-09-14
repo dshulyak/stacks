@@ -166,6 +166,13 @@ examples:
     )]
     profiling_interval: humantime::Duration,
 
+    #[clap(
+        long,
+        default_value = "false",
+        help = "consume remaininng events after interrupt signal is received"
+    )]
+    consume_interrupt: bool,
+
     #[clap(long, default_value = "false", help = "print version and exit")]
     version: bool,
 }
@@ -288,6 +295,7 @@ fn main() -> Result<()> {
             &mut dropped_counter,
             &interrupt,
             sleep_interval,
+            opt.consume_interrupt,
         ) {
             Ok(_) => break,
             Err(ErrorConsume::DroppedEvents(dropped)) => {
@@ -324,6 +332,7 @@ enum ErrorConsume {
     LibbpfError(#[from] libbpf_rs::Error),
 }
 
+#[allow(clippy::too_many_arguments)]
 fn consume_events<Fr: Frames, Sym: Symbolizer>(
     state: &mut state::State<Fr, Sym>,
     maps: &StacksMaps,
@@ -332,12 +341,10 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
     poll_interval: Duration,
+    consume_interrupt: bool,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
-        if !interrupt.load(Ordering::Relaxed) {
-            return 0;
-        }
         let event: Received = match buf.try_into() {
             Ok(buf) => buf,
             Err(err) => {
@@ -357,22 +364,21 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     })?;
     let mgr = builder.build().unwrap();
     let consume = info_span!("consume");
-
     loop {
         consume.in_scope(|| {
             if let Err(err) = mgr.poll(poll_interval) {
                 if err.kind() == libbpf_rs::ErrorKind::Interrupted {
-                    info!(
-                        "process was interrupted {:?}. will try to consume remaining events",
-                        err
-                    );
-                    _ = mgr.consume();
+                    info!("process was interrupted {:?}", err);
                 } else {
                     warn!("consume from ring buffer: {:?}", err);
                 }
             }
         });
         if !interrupt.load(Ordering::Relaxed) {
+            if consume_interrupt {
+                info!("interrupted, consuming remaining events");
+                _ = mgr.consume();
+            }
             if let Some(profiler) = &profiler {
                 if let Err(err) = profiler.borrow_mut().log_stats(progs) {
                     warn!("profiler failing to logs: {:?}", err);
