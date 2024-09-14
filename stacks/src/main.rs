@@ -335,6 +335,9 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
+        if !interrupt.load(Ordering::Relaxed) {
+            return 0;
+        }
         let event: Received = match buf.try_into() {
             Ok(buf) => buf,
             Err(err) => {
