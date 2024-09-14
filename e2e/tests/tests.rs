@@ -135,6 +135,7 @@ fn stacks_args(tmpdir: &Path, rows_per_file: u64) -> CommandArgs {
             format!("--dir={}", tmpdir.display()),
             format!("--rows={}", rows_per_file),
             format!("--groups-per-file=1"),
+            format!("--consume-interrupt"),
             format!("-p=profile:ku,switch:ku,rss:ku:1,block:ku,vfs:ku,net:ku"),
         ],
     }
