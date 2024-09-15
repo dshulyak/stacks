@@ -6,6 +6,7 @@ use libbpf_rs::{
     skel::{OpenSkel, SkelBuilder},
     Link,
 };
+use tracing::warn;
 
 use crate::{
     perf_event::{attach_perf_event, perf_event_per_cpu},
@@ -633,10 +634,15 @@ pub(crate) fn link<'a>(
             .progs_mut()
             .stacks_tracing_close()
             .attach_usdt(-1, u, "stacks_tracing", "close")
-            .context("usdt close")?;
+            .context("usdt close");
+        match _usdt_close {
+            Ok(link) => links.push(link),
+            Err(err) => {
+                warn!("failed to attach usdt close to binary {:?}: {}", u, err);
+            }
+        }
         links.push(_usdt_enter);
         links.push(_usdt_exit);
-        links.push(_usdt_close);
     }
 
     Ok((skel, links))
