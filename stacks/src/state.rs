@@ -271,20 +271,22 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                 });
             }
             Received::TraceClose(event) => {
-                // record it only once for any pid where this span_id has entered before
+                // record close event only once for any pid where this span_id has entered before
                 let pids = self
                     .tgid_span_id_pid_to_enter
                     .range((event.tgid, event.span_id, 0)..(event.tgid, event.span_id, u32::MAX))
                     .map(|(k, _)| k.2)
                     .collect::<Vec<_>>();
-                let process_info = self.tgid_process_info.get(&pids[0]);
+                let process_info = self.tgid_process_info.get(&event.tgid);
                 for (i, pid) in pids.into_iter().enumerate() {
+                    // delete all observed
                     let span = match self.tgid_span_id_pid_to_enter.remove(&(event.tgid, event.span_id, pid)) {
                         Some(span) => span,
                         None => {
                             anyhow::bail!("missing span for pid {} span_id {}", pid, event.span_id);
                         }
                     };
+                    // record only first
                     if i > 0 {
                         continue;
                     }
