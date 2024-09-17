@@ -97,3 +97,22 @@ This is not a particularly interesting example, capture from e2e/examples/writer
 
 ![Block stacks](./_assets/block_writer.png)
 
+## Tips
+
+### Splitting large profiles for faster pprof generation.
+
+Query in the exporter can be updated to include timestamp:
+
+```sql
+where
+    kind = 'rss'
+    and buildid = decode('?buildid', 'hex')
+    and timestamp < 1726573942947884522
+```
+
+Profiles are collected in relatively small batches, as at the time this is a unit of paralelizatin in datafusion.
+They can be registered individually:
+
+```sh
+stacksexport pprof -b ../go-spacemesh/build/go-spacemesh ./stacksexport/sql/pprof/rss_ustacks_growth_for_buildid.sql -r "/tmp/stacks/10/STACKS-1-*"
+```

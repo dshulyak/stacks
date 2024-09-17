@@ -12,7 +12,6 @@ with rss_growth as (
     where
         kind = 'rss'
         and buildid = decode('?buildid', 'hex')
-        and not empty(ustack)
 )
 select
     ustack,
