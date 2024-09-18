@@ -32,6 +32,15 @@ const BUILID_BINDING: &str = "?buildid";
 
 async fn generate_pprof(ctx: &SessionContext, query: &str, include_offset: bool) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
+    let columns: Vec<String> = batch
+        .0
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("empty rersult"))?
+        .schema()
+        .fields()
+        .iter()
+        .map(|f| f.name().clone())
+        .collect();
     let mut strings = PprofStringDictionary::new_strings();
     let mut functions = PprofStringDictionary::new_functions();
     let mut function_table = vec![];
@@ -82,15 +91,15 @@ async fn generate_pprof(ctx: &SessionContext, query: &str, include_offset: bool)
         duration += sampled_stack.duration;
     }
     let count_value_type = proto::ValueType {
-        r#type: *strings.get_or_insert(COUNT),
-        unit: *strings.get_or_insert(SAMPLES),
+        r#type: *strings.get_or_insert(columns[1].as_str()),
+        ..Default::default()
     };
-    let time_value_type = proto::ValueType {
-        r#type: *strings.get_or_insert(SAMPLED_CPU),
-        unit: *strings.get_or_insert(NS),
+    let amount_value_type = proto::ValueType {
+        r#type: *strings.get_or_insert(columns[2].as_str()),
+        ..Default::default()
     };
     let profile = proto::Profile {
-        sample_type: vec![count_value_type, time_value_type],
+        sample_type: vec![count_value_type, amount_value_type],
         sample: samples_table,
         string_table: strings.strings_table(),
         location: location_table,
@@ -109,12 +118,15 @@ async fn generate_pprof_with_symbolization(
     add_inlined: bool,
 ) -> Result<proto::Profile> {
     let batch = Batch(ctx.sql(query).await?.collect().await?);
-    let columns: Vec<String> = batch.0[0]
+    let columns: Vec<String> = batch
+        .0
+        .first()
+        .ok_or_else(|| anyhow::anyhow!("empty rersult"))?
         .schema()
         .fields()
         .iter()
         .map(|f| f.name().clone())
-        .collect::<Vec<_>>();
+        .collect();
 
     let mut strings = PprofStringDictionary::new_strings();
     let mut functions = PprofStringDictionary::new_functions();
@@ -215,12 +227,12 @@ async fn generate_pprof_with_symbolization(
         r#type: *strings.get_or_insert(columns[1].as_str()),
         ..Default::default()
     };
-    let time_value_type = proto::ValueType {
+    let amount_value_type = proto::ValueType {
         r#type: *strings.get_or_insert(columns[2].as_str()),
         ..Default::default()
     };
     let profile = proto::Profile {
-        sample_type: vec![count_value_type, time_value_type],
+        sample_type: vec![count_value_type, amount_value_type],
         sample: samples_table,
         string_table: strings.strings_table(),
         location: location_table,
