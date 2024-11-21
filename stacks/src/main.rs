@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use bpf::{link, Program, Programs};
 use bpf_profile::Profiler;
 use clap::Parser;
@@ -194,6 +194,8 @@ fn main() -> Result<()> {
             ),
         );
     tracing::dispatcher::set_global_default(registry.into()).expect("failed to set global default subscriber");
+
+    bump_memlock_rlimit()?;
 
     let opt: Opt = Opt::parse();
     if opt.version {
@@ -495,4 +497,17 @@ fn null_terminated_array16_from_str(s: &str) -> [u8; 16] {
     let mut comm = [0; 16];
     comm[..s.len()].copy_from_slice(s.as_bytes());
     comm
+}
+
+fn bump_memlock_rlimit() -> Result<()> {
+    let rlimit = libc::rlimit {
+        rlim_cur: 128 << 20,
+        rlim_max: 128 << 20,
+    };
+
+    if unsafe { libc::setrlimit(libc::RLIMIT_MEMLOCK, &rlimit) } != 0 {
+        bail!("Failed to increase rlimit");
+    }
+
+    Ok(())
 }
