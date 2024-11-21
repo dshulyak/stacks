@@ -90,7 +90,7 @@ __always_inline void inc_dropped()
 struct
 {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 64 * 1024 * 1024);
+    __uint(max_entries, 64 << 20);
 } events SEC(".maps");
 
 static __always_inline void *reserve_event(__u64 size)
