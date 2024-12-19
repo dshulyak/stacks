@@ -685,6 +685,9 @@ pub(crate) fn link<'a>(
     if let Some(Net { stacks }) = &programs.net {
         decode_stack_options_into_bpf_cfg(stacks, &mut cfg.net_kstack, &mut cfg.net_ustack);
     }
+    if let Some(Usdt { stacks, binary: _ }) = &programs.usdt {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.usdt_kstack, &mut cfg.usdt_ustack);
+    }
 
     skel.maps_mut()
         .events()
