@@ -86,7 +86,7 @@ impl Display for DeltaStats {
 
 struct MultiLineStats<'a>(&'a [DeltaStats]);
 
-impl<'a> Display for MultiLineStats<'a> {
+impl Display for MultiLineStats<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.0.is_empty() {
             return Ok(());
