@@ -1,7 +1,6 @@
 use std::{
     fmt::Display,
     mem::MaybeUninit,
-    ops::{Deref, DerefMut},
     path::PathBuf,
     str::{FromStr, Split},
 };
@@ -130,41 +129,6 @@ impl TryFrom<&str> for Program {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct ProgramsSet(pub(crate) Vec<Program>);
-
-impl Deref for ProgramsSet {
-    type Target = Vec<Program>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl DerefMut for ProgramsSet {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl Display for ProgramsSet {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(","))
-    }
-}
-
-impl FromStr for ProgramsSet {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let programs: Result<Vec<_>, _> = s
-            .split(',')
-            .map(|program| program.trim())
-            .filter(|program| !program.is_empty())
-            .map(Program::try_from)
-            .collect();
-        Ok(ProgramsSet(programs?))
-    }
-}
-
-#[derive(Debug, Clone)]
 pub(crate) struct Programs {
     profile: Option<Profile>,
     rss: Option<Rss>,
@@ -214,7 +178,22 @@ impl Display for Programs {
 }
 
 impl Programs {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    pub(crate) const fn with_rss(mut self, rss: Rss) -> Self {
+        self.rss = Some(rss);
+        self
+    }
+
+    pub(crate) const fn with_switch(mut self, switch: Switch) -> Self {
+        self.switch = Some(switch);
+        self
+    }
+
+    pub(crate) const fn new() -> Self {
         Programs {
             profile: None,
             rss: None,
@@ -274,6 +253,19 @@ impl Programs {
             }
         }
         Ok(programs)
+    }
+}
+
+impl FromStr for Programs {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let programs: Result<Vec<_>, _> = s
+            .split(',')
+            .map(|program| program.trim())
+            .filter(|program| !program.is_empty())
+            .map(Program::try_from)
+            .collect();
+        Programs::try_from_programs(programs?.into_iter())
     }
 }
 
@@ -590,7 +582,11 @@ impl TryFrom<Split<'_, char>> for Usdt {
             }
         }
         // check that binary exists
-        anyhow::ensure!(usdt.binary.exists(), "usdt binary path {:?} does not exist", usdt.binary);
+        anyhow::ensure!(
+            usdt.binary.exists(),
+            "usdt binary path {:?} does not exist",
+            usdt.binary
+        );
         Ok(usdt)
     }
 }

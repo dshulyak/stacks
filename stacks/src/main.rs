@@ -12,11 +12,10 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use bpf::{link, Profile, Programs, ProgramsSet, Rss, Switch};
+use bpf::{link, Profile, Programs, Rss, Switch};
 use bpf_profile::Profiler;
 use clap::Parser;
 use libbpf_rs::{Link, MapFlags, RingBufferBuilder};
-use once_cell::sync::Lazy;
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
@@ -40,13 +39,12 @@ mod symbolizer;
 #[cfg(test)]
 mod tests;
 
-// NOTE it is not constant because i want to use into()
 // default correspond to profile:u:99,rss:u:29,switch:ku
-static DEFAULT_PROGRAMS: Lazy<ProgramsSet> = Lazy::new(|| ProgramsSet(vec![
-    Profile::new(bpf::Stacks::U, 99).into(),
-    Rss::new(bpf::Stacks::U, 29).into(),
-    Switch::new(bpf::Stacks::KU, 0).into(),
-]));
+
+const DEFAULT_PROGRAMS: Programs = Programs::new()
+    .with_profile(Profile::new(bpf::Stacks::U, 99))
+    .with_rss(Rss::new(bpf::Stacks::U, 29))
+    .with_switch(Switch::new(bpf::Stacks::KU, 0));
 
 fn default_path() -> PathBuf {
     let dir_wo_index = env::temp_dir().join("stacks");
@@ -135,7 +133,7 @@ examples:
     collect kernel and user stacks on tracing events in trace_binary.
 "#,
     )]
-    programs: ProgramsSet,
+    programs: Programs,
 
     #[clap(
         long,
@@ -208,7 +206,7 @@ fn main() -> Result<()> {
     if opt.commands.is_empty() {
         anyhow::bail!("at least one command must be provided");
     }
-    let programs = Programs::try_from_programs(opt.programs.iter().cloned())?;
+    let programs = opt.programs.clone();
     info!(
         "running bpf programs: {} for commands {}",
         programs,
@@ -223,12 +221,7 @@ fn main() -> Result<()> {
         .context("current unix time")?;
     let adjustment = (current_unix - uptime).as_nanos() as u64;
 
-    let (mut skel, mut links) = link(
-        &programs,
-        opt.debug_bpf,
-        opt.bpf_events,
-        opt.bpf_stacks,
-    )?;
+    let (mut skel, mut links) = link(&programs, opt.debug_bpf, opt.bpf_events, opt.bpf_stacks)?;
 
     let zero: u8 = 0;
     for comm in opt.commands.iter() {
