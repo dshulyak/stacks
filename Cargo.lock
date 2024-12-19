@@ -2892,7 +2892,6 @@ dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libc",
- "once_cell",
  "parquet 52.2.0",
  "plain",
  "proptest",
