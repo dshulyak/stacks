@@ -15,7 +15,7 @@ use anyhow::{bail, Context, Result};
 use bpf::{link, Program, Programs};
 use bpf_profile::Profiler;
 use clap::Parser;
-use libbpf_rs::{MapFlags, RingBufferBuilder};
+use libbpf_rs::{Link, MapFlags, RingBufferBuilder};
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
@@ -93,8 +93,8 @@ struct Opt {
         long,
         default_value = "10",
         help = "file is a unit of paralellism in datafusion,
-                if data is partitioned into several files datafusion will be able to process different files on different cores,
-                additionally if file is not properly closed data will be lost."
+if data is partitioned into several files datafusion will be able to process different files on different cores,
+additionally if file is not properly closed data will be lost."
     )]
     groups_per_file: usize,
 
@@ -166,18 +166,19 @@ examples:
     )]
     profiling_interval: humantime::Duration,
 
-    #[clap(
-        long,
-        default_value = "false",
-        help = "consume remaininng events after interrupt signal is received"
-    )]
-    consume_interrupt: bool,
-
     #[clap(long, default_value = "false", help = "print version and exit")]
     version: bool,
 }
 
 fn main() -> Result<()> {
+    let interrupt = Arc::new(AtomicBool::new(true));
+    ctrlc::set_handler({
+        let interrupt = interrupt.clone();
+        move || {
+            interrupt.store(false, Ordering::Relaxed);
+        }
+    })?;
+
     let registry = Registry::default()
         .with(
             tracing_stacks::StacksSubscriber {}.with_filter(
@@ -218,12 +219,6 @@ fn main() -> Result<()> {
         opt.commands.join(", ")
     );
 
-    let interrupt = Arc::new(AtomicBool::new(true));
-    let interrupt_handler = interrupt.clone();
-    ctrlc::set_handler(move || {
-        interrupt_handler.store(false, Ordering::Relaxed);
-    })?;
-
     ensure_exists(&opt.dir)?;
 
     let uptime = parse_uptime()?;
@@ -232,7 +227,7 @@ fn main() -> Result<()> {
         .context("current unix time")?;
     let adjustment = (current_unix - uptime).as_nanos() as u64;
 
-    let (mut skel, _links) = link(
+    let (mut skel, mut links) = link(
         &programs,
         opt.usdt.as_slice(),
         opt.debug_bpf,
@@ -297,7 +292,7 @@ fn main() -> Result<()> {
             &mut dropped_counter,
             &interrupt,
             sleep_interval,
-            opt.consume_interrupt,
+            &mut links,
         ) {
             Ok(_) => break,
             Err(ErrorConsume::DroppedEvents(dropped)) => {
@@ -343,7 +338,7 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
     dropped_counter: &mut u64,
     interrupt: &Arc<AtomicBool>,
     poll_interval: Duration,
-    consume_interrupt: bool,
+    program_links: &mut Vec<Link>,
 ) -> Result<(), ErrorConsume> {
     let mut builder = RingBufferBuilder::new();
     builder.add(maps.events(), |buf: &[u8]| {
@@ -377,10 +372,13 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             }
         });
         if !interrupt.load(Ordering::Relaxed) {
-            if consume_interrupt {
-                info!("interrupted, consuming remaining events");
-                _ = mgr.consume();
-            }
+            info!("interrupted, dropping programs and consuming remaining events for 10s");
+            program_links.clear();
+            // 10s is an arbitrary timeout that must be sufficient to collect all remaining events
+            // in the ring buffer. if events are collected earlier poll will return earlier
+            // also poll can be interrupted again, if waiting is inconvinient
+            _ = mgr.poll(Duration::from_secs(10));
+
             if let Some(profiler) = &profiler {
                 if let Err(err) = profiler.borrow_mut().log_stats(progs) {
                     warn!("profiler failing to logs: {:?}", err);
