@@ -625,7 +625,7 @@ pub(crate) enum Received<'a> {
     TcpSend(&'a stacks_types::net_io_event),
 }
 
-impl<'a> Received<'a> {
+impl Received<'_> {
     pub(crate) fn program_name(&self) -> ProgramName {
         // TODO i need to have only one enum
         match self {

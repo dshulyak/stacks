@@ -211,7 +211,7 @@ impl Display for Switch {
     }
 }
 
-impl<'a> TryFrom<Split<'a, char>> for Switch {
+impl TryFrom<Split<'_, char>> for Switch {
     type Error = anyhow::Error;
 
     fn try_from(value: Split<char>) -> Result<Self> {
@@ -258,7 +258,7 @@ impl Display for Profile {
     }
 }
 
-impl<'a> TryFrom<Split<'a, char>> for Profile {
+impl TryFrom<Split<'_, char>> for Profile {
     type Error = anyhow::Error;
 
     fn try_from(value: Split<char>) -> Result<Self> {
@@ -311,7 +311,7 @@ impl Display for Block {
     }
 }
 
-impl<'a> TryFrom<Split<'a, char>> for Block {
+impl TryFrom<Split<'_, char>> for Block {
     type Error = anyhow::Error;
 
     fn try_from(value: Split<char>) -> Result<Self> {
@@ -346,7 +346,7 @@ impl Display for Vfs {
     }
 }
 
-impl<'a> TryFrom<Split<'a, char>> for Vfs {
+impl TryFrom<Split<'_, char>> for Vfs {
     type Error = anyhow::Error;
 
     fn try_from(value: Split<char>) -> Result<Self> {
@@ -376,7 +376,7 @@ impl Display for Rss {
     }
 }
 
-impl<'a> TryFrom<Split<'a, char>> for Rss {
+impl TryFrom<Split<'_, char>> for Rss {
     type Error = anyhow::Error;
 
     fn try_from(value: Split<char>) -> Result<Self> {
