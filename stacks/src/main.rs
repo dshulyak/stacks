@@ -12,10 +12,11 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use bpf::{link, Program, Programs};
+use bpf::{link, Profile, Programs, ProgramsSet, Rss, Switch};
 use bpf_profile::Profiler;
 use clap::Parser;
 use libbpf_rs::{Link, MapFlags, RingBufferBuilder};
+use once_cell::sync::Lazy;
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
@@ -39,7 +40,13 @@ mod symbolizer;
 #[cfg(test)]
 mod tests;
 
-const DEFAULT_PROGRAMS: &str = "profile:u:99,rss:u:29,switch:k";
+// NOTE it is not constant because i want to use into()
+// default correspond to profile:u:99,rss:u:29,switch:ku
+static DEFAULT_PROGRAMS: Lazy<ProgramsSet> = Lazy::new(|| ProgramsSet(vec![
+    Profile::new(bpf::Stacks::U, 99).into(),
+    Rss::new(bpf::Stacks::U, 29).into(),
+    Switch::new(bpf::Stacks::KU, 0).into(),
+]));
 
 fn default_path() -> PathBuf {
     let dir_wo_index = env::temp_dir().join("stacks");
@@ -102,7 +109,7 @@ additionally if file is not properly closed data will be lost."
         short,
         num_args = 1..,
         value_delimiter = ',',
-        default_value = DEFAULT_PROGRAMS,
+        default_value_t = DEFAULT_PROGRAMS.clone(),
         help = r#"list of bpf programs that will be collecting data.
 examples:
 - profile:u:99
@@ -124,9 +131,11 @@ examples:
 - net:uk
     collect kernel and user stack on udp/tcp send/recv events.
     this set of programs require fentry/fexit support.
+- usdt:uk:/usr/bin/traced_binary
+    collect kernel and user stacks on tracing events in trace_binary.
 "#,
     )]
-    programs: Vec<String>,
+    programs: ProgramsSet,
 
     #[clap(
         long,
@@ -144,13 +153,6 @@ examples:
 
     #[clap(long, default_value = "1s", help = "polling interval for bpf ringbuf")]
     poll: humantime::Duration,
-
-    #[clap(
-        short,
-        long,
-        help = "path to the binary instrumented with stacks_tracing usdt provider"
-    )]
-    usdt: Vec<PathBuf>,
 
     #[clap(
         long,
@@ -206,13 +208,7 @@ fn main() -> Result<()> {
     if opt.commands.is_empty() {
         anyhow::bail!("at least one command must be provided");
     }
-    // NOTE collections in clap derive are being designed
-    // i didn't manage to make them work with a little bit of code
-    let mut programs: Vec<Program> = vec![];
-    for program in opt.programs.iter() {
-        programs.push(program.as_str().try_into()?);
-    }
-    let programs = Programs::try_from_programs(programs.into_iter())?;
+    let programs = Programs::try_from_programs(opt.programs.iter().cloned())?;
     info!(
         "running bpf programs: {} for commands {}",
         programs,
@@ -229,7 +225,6 @@ fn main() -> Result<()> {
 
     let (mut skel, mut links) = link(
         &programs,
-        opt.usdt.as_slice(),
         opt.debug_bpf,
         opt.bpf_events,
         opt.bpf_stacks,
