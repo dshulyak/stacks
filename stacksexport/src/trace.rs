@@ -129,7 +129,7 @@ pub(crate) async fn export(ctx: &SessionContext, queries: Vec<String>, out: &Pat
 #[derive(Debug)]
 struct EventsStream<'a>(Vec<RecordBatch>, &'a StackTraceGraph);
 
-impl<'a> Serialize for EventsStream<'a> {
+impl Serialize for EventsStream<'_> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
