@@ -1,4 +1,9 @@
-use std::{fmt::Display, mem::MaybeUninit, path::PathBuf, str::Split};
+use std::{
+    fmt::Display,
+    mem::MaybeUninit,
+    path::PathBuf,
+    str::{FromStr, Split},
+};
 
 use anyhow::{Context, Result};
 use libbpf_rs::{
@@ -56,6 +61,42 @@ pub(crate) enum Program {
     Net(Net),
 }
 
+impl From<Profile> for Program {
+    fn from(profile: Profile) -> Self {
+        Program::Profile(profile)
+    }
+}
+
+impl From<Rss> for Program {
+    fn from(rss: Rss) -> Self {
+        Program::Rss(rss)
+    }
+}
+
+impl From<Switch> for Program {
+    fn from(switch: Switch) -> Self {
+        Program::Switch(switch)
+    }
+}
+
+impl From<Block> for Program {
+    fn from(block: Block) -> Self {
+        Program::Block(block)
+    }
+}
+
+impl From<Vfs> for Program {
+    fn from(vfs: Vfs) -> Self {
+        Program::Vfs(vfs)
+    }
+}
+
+impl From<Net> for Program {
+    fn from(net: Net) -> Self {
+        Program::Net(net)
+    }
+}
+
 impl Display for Program {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -95,6 +136,7 @@ pub(crate) struct Programs {
     block: Option<Block>,
     vfs: Option<Vfs>,
     net: Option<Net>,
+    usdt: Option<Usdt>,
 }
 
 impl Display for Programs {
@@ -106,6 +148,7 @@ impl Display for Programs {
             block,
             vfs,
             net,
+            usdt,
         } = self;
 
         let mut programs = vec![];
@@ -127,12 +170,30 @@ impl Display for Programs {
         if let Some(net) = net {
             programs.push(format!("{}", net));
         }
+        if let Some(usdt) = usdt {
+            programs.push(format!("{}", usdt));
+        }
         write!(f, "{}", programs.join(", "))
     }
 }
 
 impl Programs {
-    pub(crate) fn new() -> Self {
+    pub(crate) const fn with_profile(mut self, profile: Profile) -> Self {
+        self.profile = Some(profile);
+        self
+    }
+
+    pub(crate) const fn with_rss(mut self, rss: Rss) -> Self {
+        self.rss = Some(rss);
+        self
+    }
+
+    pub(crate) const fn with_switch(mut self, switch: Switch) -> Self {
+        self.switch = Some(switch);
+        self
+    }
+
+    pub(crate) const fn new() -> Self {
         Programs {
             profile: None,
             rss: None,
@@ -140,6 +201,7 @@ impl Programs {
             block: None,
             vfs: None,
             net: None,
+            usdt: None,
         }
     }
 
@@ -194,10 +256,32 @@ impl Programs {
     }
 }
 
+impl FromStr for Programs {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        let programs: Result<Vec<_>, _> = s
+            .split(',')
+            .map(|program| program.trim())
+            .filter(|program| !program.is_empty())
+            .map(Program::try_from)
+            .collect();
+        Programs::try_from_programs(programs?.into_iter())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct Switch {
     stacks: Stacks,
     minimal_span_duration: u64,
+}
+
+impl Switch {
+    pub(crate) const fn new(stacks: Stacks, minimal_span_duration_ns: u64) -> Self {
+        Switch {
+            stacks,
+            minimal_span_duration: minimal_span_duration_ns,
+        }
+    }
 }
 
 impl Display for Switch {
@@ -250,6 +334,12 @@ impl Default for Switch {
 pub(crate) struct Profile {
     stacks: Stacks,
     frequency: u64,
+}
+
+impl Profile {
+    pub(crate) const fn new(stacks: Stacks, frequency: u64) -> Self {
+        Profile { stacks, frequency }
+    }
 }
 
 impl Display for Profile {
@@ -370,6 +460,12 @@ pub(crate) struct Rss {
     throttle: u16,
 }
 
+impl Rss {
+    pub(crate) const fn new(stacks: Stacks, throttle: u16) -> Self {
+        Rss { stacks, throttle }
+    }
+}
+
 impl Display for Rss {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "rss:{}:{}", self.stacks, self.throttle)
@@ -451,7 +547,52 @@ impl TryFrom<Split<'_, char>> for Net {
 }
 
 #[derive(Debug, Clone)]
-enum Stacks {
+pub(crate) struct Usdt {
+    stacks: Stacks,
+    binary: PathBuf,
+}
+
+impl Display for Usdt {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "usdt:{}:{}", self.stacks, self.binary.display())
+    }
+}
+
+impl Default for Usdt {
+    fn default() -> Self {
+        Usdt {
+            stacks: Stacks::U,
+            binary: PathBuf::new(),
+        }
+    }
+}
+
+impl TryFrom<Split<'_, char>> for Usdt {
+    type Error = anyhow::Error;
+    fn try_from(value: Split<char>) -> Result<Self> {
+        let mut usdt = Usdt::default();
+        for item in value.take(2) {
+            let maybe_stacks: Result<Stacks> = item.try_into();
+            // if stacks are valid then set stacks
+            if let Ok(stacks) = maybe_stacks {
+                usdt.stacks = stacks;
+            } else {
+                // if stacks are not valid then assume it is a binary path
+                usdt.binary = PathBuf::from(item);
+            }
+        }
+        // check that binary exists
+        anyhow::ensure!(
+            usdt.binary.exists(),
+            "usdt binary path {:?} does not exist",
+            usdt.binary
+        );
+        Ok(usdt)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum Stacks {
     U,
     K,
     UK,
@@ -509,7 +650,6 @@ fn decode_stack_options_into_bpf_cfg(opts: &Stacks, kstack: &mut MaybeUninit<boo
 
 pub(crate) fn link<'a>(
     programs: &Programs,
-    usdt: &'a [PathBuf],
     debug: bool,
     events_max_entries: u32,
     stacks_max_entries: u32,
@@ -544,6 +684,9 @@ pub(crate) fn link<'a>(
     }
     if let Some(Net { stacks }) = &programs.net {
         decode_stack_options_into_bpf_cfg(stacks, &mut cfg.net_kstack, &mut cfg.net_ustack);
+    }
+    if let Some(Usdt { stacks, binary: _ }) = &programs.usdt {
+        decode_stack_options_into_bpf_cfg(stacks, &mut cfg.usdt_kstack, &mut cfg.usdt_ustack);
     }
 
     skel.maps_mut()
@@ -619,27 +762,27 @@ pub(crate) fn link<'a>(
             .context("attach sched exec")?,
     );
 
-    for u in usdt {
+    if let Some(usdt) = programs.usdt.as_ref() {
         let _usdt_enter = skel
             .progs_mut()
             .stacks_tracing_enter()
-            .attach_usdt(-1, u, "stacks_tracing", "enter")
+            .attach_usdt(-1, &usdt.binary, "stacks_tracing", "enter")
             .context("usdt enter")?;
         let _usdt_exit = skel
             .progs_mut()
             .stacks_tracing_exit()
-            .attach_usdt(-1, u, "stacks_tracing", "exit")
+            .attach_usdt(-1, &usdt.binary, "stacks_tracing", "exit")
             .context("usdt exit");
         match _usdt_exit {
             Ok(link) => links.push(link),
             Err(err) => {
-                info!("usdt exit is not attached to binary {:?}: {}", u, err);
+                info!("usdt exit is not attached to binary {:?}: {}", usdt, err);
             }
         }
         let _usdt_close = skel
             .progs_mut()
             .stacks_tracing_close()
-            .attach_usdt(-1, u, "stacks_tracing", "close")
+            .attach_usdt(-1, &usdt.binary, "stacks_tracing", "close")
             .context("usdt close")?;
         links.push(_usdt_enter);
         links.push(_usdt_close);
