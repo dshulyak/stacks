@@ -372,12 +372,9 @@ fn consume_events<Fr: Frames, Sym: Symbolizer>(
             }
         });
         if !interrupt.load(Ordering::Relaxed) {
-            info!("interrupted, dropping programs and consuming remaining events for 10s");
+            info!("interrupted, dropping programs and consuming remaining events");
             program_links.clear();
-            // 10s is an arbitrary timeout that must be sufficient to collect all remaining events
-            // in the ring buffer. if events are collected earlier poll will return earlier
-            // also poll can be interrupted again, if waiting is inconvinient
-            _ = mgr.poll(Duration::from_secs(10));
+            _ = mgr.consume();
 
             if let Some(profiler) = &profiler {
                 if let Err(err) = profiler.borrow_mut().log_stats(progs) {
