@@ -489,13 +489,13 @@ int BPF_USDT(stacks_tracing_exit, u64 span_id)
     event->pid = pid;
     event->cpu_id = bpf_get_smp_processor_id();
     event->span_id = span_id;
-    if (cfg.switch_ustack)
+    if (cfg.usdt_ustack)
     {
         event->ustack = bpf_get_stackid(ctx, &stackmap, BPF_F_USER_STACK | BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
     } else {
         event->ustack = -1;
     }
-    if (cfg.switch_kstack)
+    if (cfg.usdt_kstack)
     {
         event->kstack = bpf_get_stackid(ctx, &stackmap, BPF_F_FAST_STACK_CMP | BPF_F_REUSE_STACKID);
     } else {
