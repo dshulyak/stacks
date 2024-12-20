@@ -1,7 +1,9 @@
 use std::{
     cell::RefCell,
     collections::HashSet,
-    env, fs,
+    env,
+    fmt::Write,
+    fs,
     io::Read,
     path::{Path, PathBuf},
     sync::{
@@ -14,7 +16,10 @@ use std::{
 use anyhow::{bail, Context, Result};
 use bpf::{link, Profile, Programs, Rss, Switch};
 use bpf_profile::Profiler;
-use clap::Parser;
+use clap::{
+    builder::{IntoResettable, Resettable, StyledStr},
+    Parser,
+};
 use libbpf_rs::{Link, MapFlags, RingBufferBuilder};
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
@@ -40,7 +45,6 @@ mod symbolizer;
 mod tests;
 
 // default correspond to profile:u:99,rss:u:29,switch:ku
-
 const DEFAULT_PROGRAMS: Programs = Programs::new()
     .with_profile(Profile::new(bpf::Stacks::U, 99))
     .with_rss(Rss::new(bpf::Stacks::U, 29))
@@ -105,33 +109,8 @@ additionally if file is not properly closed data will be lost."
 
     #[clap(
         short,
-        num_args = 1..,
-        value_delimiter = ',',
         default_value_t = DEFAULT_PROGRAMS.clone(),
-        help = r#"list of bpf programs that will be collecting data.
-examples:
-- profile:u:99
-    collect user stacks at 99hz frequency.
-- rss:u:29
-    collect user stacks on every rss change event.
-- switch:ku:1us
-    collect kernel and user stacks on context switch event.
-    bpf collector will drop all spans that are shorter than 1us.
-- switch:n
-    do not collect stacks on context switch event.
-- block:uk
-    collect kernel and user stacks on block io event.
-    this program is not enabled by default as it requires tracepoints that were added
-    only in more recent kernel (TODO check which versions exactly).
-- vfs:uk
-    collect kernel and user stacks on vfs read and writes, including vectorized versions.
-    this program is not enabled by default as it requires fentry/fexit support in the kernel (TODO check version)
-- net:uk
-    collect kernel and user stack on udp/tcp send/recv events.
-    this set of programs require fentry/fexit support.
-- usdt:uk:/usr/bin/traced_binary
-    collect kernel and user stacks on tracing events in trace_binary.
-"#,
+        help = ProgramsHelp{},
     )]
     programs: Programs,
 
@@ -493,4 +472,15 @@ fn bump_memlock_rlimit() -> Result<()> {
     }
 
     Ok(())
+}
+
+struct ProgramsHelp {}
+
+impl IntoResettable<StyledStr> for ProgramsHelp {
+    fn into_resettable(self) -> Resettable<StyledStr> {
+        let programs = Programs::default();
+        let mut rst = String::new();
+        writeln!(&mut rst, "{}", programs.help()).expect("no error");
+        Resettable::Value(StyledStr::from(rst))
+    }
 }

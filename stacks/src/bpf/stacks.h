@@ -91,6 +91,7 @@ struct tracing_exit_event
     __u32 cpu_id;
     __u64 span_id;
     __s32 ustack;
+    __s32 kstack;
 };
 
 struct tracing_close_event

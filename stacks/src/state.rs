@@ -267,7 +267,7 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                     amount: span.amount as i64,
                     trace_name: span.name.clone(),
                     ustack: event.ustack,
-                    ..Default::default()
+                    kstack: event.kstack,
                 });
             }
             Received::TraceClose(event) => {

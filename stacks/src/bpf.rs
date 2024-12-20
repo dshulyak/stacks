@@ -1,5 +1,5 @@
 use std::{
-    fmt::Display,
+    fmt::{Display, Formatter},
     mem::MaybeUninit,
     path::PathBuf,
     str::{FromStr, Split},
@@ -177,6 +177,20 @@ impl Display for Programs {
     }
 }
 
+impl Default for Programs {
+    fn default() -> Self {
+        Programs {
+            profile: Some(Profile::default()),
+            rss: Some(Rss::default()),
+            switch: Some(Switch::default()),
+            block: Some(Block::default()),
+            vfs: Some(Vfs::default()),
+            net: Some(Net::default()),
+            usdt: Some(Usdt::default()),
+        }
+    }
+}
+
 impl Programs {
     pub(crate) const fn with_profile(mut self, profile: Profile) -> Self {
         self.profile = Some(profile);
@@ -209,63 +223,109 @@ impl Programs {
         self.profile.as_ref().map_or(1, |p| p.frequency)
     }
 
-    pub(crate) fn try_from_programs(progs: impl Iterator<Item = Program>) -> Result<Self> {
-        let mut programs = Programs::new();
-        for program in progs {
-            // raise an error if the program is already set
-            match program {
-                Program::Profile(profile) => {
-                    if programs.profile.is_some() {
-                        anyhow::bail!("duplicate profile. {} and {}", programs.profile.unwrap(), profile);
-                    }
-                    programs.profile = Some(profile);
+    pub(crate) fn update(&mut self, program: Program) -> Result<()> {
+        match program {
+            Program::Profile(profile) => {
+                if self.profile.is_some() {
+                    anyhow::bail!("duplicate profile. {} and {}", self.profile.as_ref().unwrap(), profile);
                 }
-                Program::Rss(rss) => {
-                    if programs.rss.is_some() {
-                        anyhow::bail!("duplicat rss. {} and {}", programs.rss.unwrap(), rss);
-                    }
-                    programs.rss = Some(rss);
+                self.profile = Some(profile);
+            }
+            Program::Rss(rss) => {
+                if self.rss.is_some() {
+                    anyhow::bail!("duplicat rss. {} and {}", self.rss.as_ref().unwrap(), rss);
                 }
-                Program::Switch(switch) => {
-                    if programs.switch.is_some() {
-                        anyhow::bail!("duplicate switch. {} and {}", programs.switch.unwrap(), switch);
-                    }
-                    programs.switch = Some(switch);
+                self.rss = Some(rss);
+            }
+            Program::Switch(switch) => {
+                if self.switch.is_some() {
+                    anyhow::bail!("duplicate switch. {} and {}", self.switch.as_ref().unwrap(), switch);
                 }
-                Program::Block(block) => {
-                    if programs.block.is_some() {
-                        anyhow::bail!("duplicate block. {} and {}", programs.block.unwrap(), block);
-                    }
-                    programs.block = Some(block);
+                self.switch = Some(switch);
+            }
+            Program::Block(block) => {
+                if self.block.is_some() {
+                    anyhow::bail!("duplicate block. {} and {}", self.block.as_ref().unwrap(), block);
                 }
-                Program::Vfs(vfs) => {
-                    if programs.vfs.is_some() {
-                        anyhow::bail!("duplicate vfs. {} and {}", programs.vfs.unwrap(), vfs);
-                    }
-                    programs.vfs = Some(vfs);
+                self.block = Some(block);
+            }
+            Program::Vfs(vfs) => {
+                if self.vfs.is_some() {
+                    anyhow::bail!("duplicate vfs. {} and {}", self.vfs.as_ref().unwrap(), vfs);
                 }
-                Program::Net(net) => {
-                    if programs.net.is_some() {
-                        anyhow::bail!("duplicate net. {} and {}", programs.net.unwrap(), net);
-                    }
-                    programs.net = Some(net);
+                self.vfs = Some(vfs);
+            }
+            Program::Net(net) => {
+                if self.net.is_some() {
+                    anyhow::bail!("duplicate net. {} and {}", self.net.as_ref().unwrap(), net);
                 }
+                self.net = Some(net);
             }
         }
-        Ok(programs)
+        Ok(())
+    }
+
+    pub(crate) fn help(&self) -> ProgramsHelp {
+        ProgramsHelp { programs: self }
     }
 }
 
 impl FromStr for Programs {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        let programs: Result<Vec<_>, _> = s
-            .split(',')
-            .map(|program| program.trim())
-            .filter(|program| !program.is_empty())
-            .map(Program::try_from)
-            .collect();
-        Programs::try_from_programs(programs?.into_iter())
+        let mut programs = Programs::new();
+        for program in s.split(",").map(str::trim) {
+            programs.update(program.try_into()?)?;
+        }
+        Ok(programs)
+    }
+}
+
+pub(crate) struct ProgramsHelp<'a> {
+    pub(crate) programs: &'a Programs,
+}
+
+impl Display for ProgramsHelp<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        let Programs {
+            profile,
+            rss,
+            switch,
+            block,
+            vfs,
+            net,
+            usdt,
+        } = self.programs;
+        if let Some(profile) = profile {
+            profile.help(f)?;
+        }
+        if let Some(rss) = rss {
+            rss.help(f)?;
+        }
+        if let Some(switch) = switch {
+            switch.help(f)?;
+        }
+        if let Some(block) = block {
+            block.help(f)?;
+        }
+        if let Some(vfs) = vfs {
+            vfs.help(f)?;
+        }
+        if let Some(net) = net {
+            net.help(f)?;
+        }
+        if let Some(usdt) = usdt {
+            usdt.help(f)?;
+        }
+        Ok(())
+    }
+}
+
+pub(crate) trait ProgramHelp: Display {
+    const HELP: &'static str;
+
+    fn help(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "- {}\n{}\n", self, Self::HELP)
     }
 }
 
@@ -282,6 +342,14 @@ impl Switch {
             minimal_span_duration: minimal_span_duration_ns,
         }
     }
+}
+
+impl ProgramHelp for Switch {
+    const HELP: &'static str = r#"collect stack traces on context switch event.
+the format is switch:<stack trace spec>:<duration>.
+all events that are shorter than the specified duration will be discarded.
+if either stack trace spec or duration is omitted the default value will be used.
+"#;
 }
 
 impl Display for Switch {
@@ -342,6 +410,13 @@ impl Profile {
     }
 }
 
+impl ProgramHelp for Profile {
+    const HELP: &'static str = r#"collect stack traces at a given frequency.
+the format is profile:<stack trace spec>:<frequency>.
+if either stack trace spec or frequency is omitted the default value will be used.
+"#;
+}
+
 impl Display for Profile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "profile:{}:{}", self.stacks, self.frequency)
@@ -389,6 +464,13 @@ pub(crate) struct Block {
     stacks: Stacks,
 }
 
+impl ProgramHelp for Block {
+    const HELP: &'static str = r#"collect stack traces on writes/reads to block device.
+the format is block:<stack trace spec>.
+if stack trace spec is omitted the default value will be used.
+"#;
+}
+
 impl Default for Block {
     fn default() -> Self {
         Block { stacks: Stacks::N }
@@ -422,6 +504,13 @@ impl TryFrom<Split<'_, char>> for Block {
 #[derive(Debug, Clone)]
 pub(crate) struct Vfs {
     stacks: Stacks,
+}
+
+impl ProgramHelp for Vfs {
+    const HELP: &'static str = r#"collect stack traces on vfs writes/reads.
+the format is vfs:<stack trace spec>.
+if stack trace spec is omitted the default value will be used.
+"#;
 }
 
 impl Default for Vfs {
@@ -464,6 +553,14 @@ impl Rss {
     pub(crate) const fn new(stacks: Stacks, throttle: u16) -> Self {
         Rss { stacks, throttle }
     }
+}
+
+impl ProgramHelp for Rss {
+    const HELP: &'static str = r#"collect stack traces on rss changes.
+the format is rss:<stack trace spec>:<throttle>.
+if either stack trace spec or throttle is omitted the default value will be used.
+throttle is the number of rss events to skip before collecting a stack trace.
+"#;
 }
 
 impl Display for Rss {
@@ -516,6 +613,13 @@ pub(crate) struct Net {
     stacks: Stacks,
 }
 
+impl ProgramHelp for Net {
+    const HELP: &'static str = r#"collect stack traces on net events.
+the format is net:<stack trace spec>.
+if stack trace spec is omitted the default value will be used.
+"#;
+}
+
 impl Default for Net {
     fn default() -> Self {
         Net { stacks: Stacks::N }
@@ -550,6 +654,14 @@ impl TryFrom<Split<'_, char>> for Net {
 pub(crate) struct Usdt {
     stacks: Stacks,
     binary: PathBuf,
+}
+
+impl ProgramHelp for Usdt {
+    const HELP: &'static str = r#"collect stack traces on usdt events.
+the format is usdt:<stack trace spec>:<binary path>.
+binary path is the path to the binary that contains the usdt probes.
+if stack trace spec is omitted the default value will be used.
+"#;
 }
 
 impl Display for Usdt {
