@@ -59,6 +59,7 @@ pub(crate) enum Program {
     Block(Block),
     Vfs(Vfs),
     Net(Net),
+    Usdt(Usdt),
 }
 
 impl From<Profile> for Program {
@@ -106,6 +107,7 @@ impl Display for Program {
             Program::Block(block) => write!(f, "{}", block),
             Program::Vfs(vfs) => write!(f, "{}", vfs),
             Program::Net(net) => write!(f, "{}", net),
+            Program::Usdt(usdt) => write!(f, "{}", usdt),
         }
     }
 }
@@ -122,6 +124,7 @@ impl TryFrom<&str> for Program {
             Some("block") => Ok(Program::Block(parts.try_into()?)),
             Some("vfs") => Ok(Program::Vfs(parts.try_into()?)),
             Some("net") => Ok(Program::Net(parts.try_into()?)),
+            Some("usdt") => Ok(Program::Usdt(parts.try_into()?)),
             Some(program) => anyhow::bail!("invalid program {}", program),
             None => anyhow::bail!("empty program"),
         }
@@ -260,6 +263,12 @@ impl Programs {
                     anyhow::bail!("duplicate net. {} and {}", self.net.as_ref().unwrap(), net);
                 }
                 self.net = Some(net);
+            }
+            Program::Usdt(usdt) => {
+                if self.usdt.is_some() {
+                    anyhow::bail!("duplicate usdt. {} and {}", self.usdt.as_ref().unwrap(), usdt);
+                }
+                self.usdt = Some(usdt);
             }
         }
         Ok(())

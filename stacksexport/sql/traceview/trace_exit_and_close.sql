@@ -5,7 +5,7 @@ select
     duration / 1000 as duration,
     tgid as pid,
     pid as tid,
-    command as name,
+    trace_name as name,
     cpu,
     ustack as end_stack
 from stacks
