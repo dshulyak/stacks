@@ -1,6 +1,6 @@
 //! Note that this example will not finish by itself and almost guaranteed to deadlock.
 
-use std::sync::Arc;
+use std::{hint::black_box, sync::Arc};
 
 use tokio::sync::Mutex;
 use tracing::instrument;
@@ -29,13 +29,28 @@ async fn main() {
             }
         }
     });
+    // throw in task that sleep periodically to make it more deadlock standout
+    let handle3 = tokio::spawn(sleep());
     handle1.await.expect("no error");
     handle2.await.expect("no error");
+    handle3.await.expect("no error");
 }
 
 struct State {
     first: Mutex<u64>,
     second: Mutex<u64>,
+}
+
+#[instrument]
+async fn sleep() {
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+        let mut squares = 1f64;
+        for _ in 0..1000 {
+            squares = squares.powi(2);
+        }
+        black_box(squares);
+    }
 }
 
 impl State {
