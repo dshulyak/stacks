@@ -45,11 +45,11 @@ struct State {
 async fn sleep() {
     loop {
         tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-        let mut squares = 1f64;
-        for _ in 0..1000 {
-            squares = squares.powi(2);
+        let mut float_pow: f64 = 1.01;
+        for _ in 0..100000 {
+            float_pow = float_pow.powf(2f64);
         }
-        black_box(squares);
+        black_box(float_pow);
     }
 }
 

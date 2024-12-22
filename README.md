@@ -116,3 +116,56 @@ They can be registered individually:
 ```sh
 stacksexport pprof -b ../go-spacemesh/build/go-spacemesh ./stacksexport/sql/pprof/rss_ustacks_growth_for_buildid.sql -r "/tmp/stacks/10/STACKS-1-*"
 ```
+
+### Debugging async runtime
+
+```rs
+#[tokio::main]
+async fn main() {
+    tracing_stacks::init();
+    sleep.instrument(tracing::info_span!("sleep")).await;
+}
+
+async fn sleep() {
+    for _ in 0..100 {
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+}
+```
+
+In the example above sleep span will be entered every 100us, then immediately exit, repeat for 100 times and then closed.
+By adding [usdt probes](https://lwn.net/Articles/753601/) for each of those events it is possible to observe async runtime behaviour on demand.
+
+Example of several debugging utilities:
+
+```bash
+sudo stacks -p usdt:./target/debug/examples/deadlock:u,switch:u deadlock
+```
+
+#### Pprof view with idle/wait time
+
+```bash
+stacksexport pprof ./stacksexport/sql/pprof/usdt_ustack_trace_wait_for_buildid.sql -b ./target/debug/examples/deadlock
+```
+
+#### Trace view with all tasks
+
+Note that catapult repo needs to be cloned before running this command.
+
+```bash
+PATH=$PATH:~/catapult/tracing/bin stacksexport trace ./stacksexport/sql/traceview/usdt_all.sql
+```
+
+#### Trace with with slow tasks (slower than 10ms)
+
+```bash
+PATH=$PATH:~/catapult/tracing/bin stacksexport trace ./stacksexport/sql/traceview/usdt_slow_on_cpu_10ms.sql
+```
+
+#### Trace view with tasks that weren't closed
+
+Useful for debugging stuck tasks.
+
+```bash
+PATH=$PATH:~/catapult/tracing/bin stacksexport trace ./stacksexport/sql/traceview/usdt_wait_time_not_closed.sql
+```

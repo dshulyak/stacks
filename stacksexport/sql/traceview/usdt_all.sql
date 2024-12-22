@@ -9,5 +9,5 @@ select
     cpu,
     ustack as end_stack
 from stacks
-    where kind in ('trace_exit', 'trace_close')
-    order by start, pid
+where kind in ('trace_exit', 'trace_close')
+order by start, pid
