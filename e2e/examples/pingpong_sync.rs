@@ -26,6 +26,7 @@ fn main() -> anyhow::Result<()> {
         s.spawn(move || {
             let ping_span = tracing::info_span!("ping");
             let _ping_guard = ping_span.enter();
+            let _another_guard = ping_span.enter();
             let (mut stream, _) = server.accept().expect("accept");
             let ping = vec![0u8; (opt.ping << 10) as usize];
             let mut pong = vec![0u8; (opt.pong << 10) as usize];
