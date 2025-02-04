@@ -13,7 +13,6 @@ one required change might be to compile with `force-frame-pointers=yes`, and it 
 
 additionally, **tracing-stacks** is a basic extension for popular tracing crate.
 if enabled it will label all os events that happened within the span with correct span and span name.
-TODO add an example how it is useful (e.g in pprof or traceviewer) 
 
 the data is collected into parquet files. it can be later exported into
 pprof or chrome traceviewer with **stacksexport** tool or explored with jupyter.
@@ -38,15 +37,24 @@ cargo install --path stacks
 cargo install --path stacksexport
 ```
 
-For example i will collect stacks from running stacks, code and firefox commands. The command below will be doing
-collecting user stacks at 99hz rate, user stacks every 29th rss growth event, kernel and user stack for cpu switch event
-and user/kernel stacks for write/read from block device. 
+The command below will collect user stacks at 99hz rate, user stacks every 29th rss growth event, 
+kernel and user stacks for cpu switch event and user and kernel stacks for write/read from block device. 
 
 ```sh
 sudo ./target/release-debug/stacks stacks code firefox -p profile:u:99,rss:u:29,switch:uk,block:uk
 ```
 
-After collecting data it can be viewed with stacksexport, also make to install [pprof](https://github.com/google/pprof).
+### Installing catapult
+
+Catapult is used for viewing traces.
+To install clone it with `git clone https://chromium.googlesource.com/catapult`.
+
+`trace2html` needs to be in the PATH.
+
+### Installing pprof
+
+Follow instructions here https://github.com/google/pprof .
+Or just `go install github.com/google/pprof@latest`.
 
 ### profile
 
@@ -57,7 +65,7 @@ stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/cpu
 ![Profile Stacks](./_assets/profile_stacks.png "Profile Stacks Image")
 
 By providing `-b ./target/release-debug/stacks` to stacksexport it is also possible to extend collected data
-with source code information for nicer UX.
+with source code information.
 
 ![Code](./_assets/code_stacks.png)
 
@@ -68,7 +76,7 @@ stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/rss
 ```
 
 One important detail about rss is that events will be captured when program request memory pages from os,
-so for example it will show rss growth when vector is initialized, but will show when element is written.
+for example it will not show rss growth when vector is initialized, but will show when element is written.
 
 ![Rss stacks](./_assets/rss_stacks.png)
 
@@ -78,7 +86,7 @@ so for example it will show rss growth when vector is initialized, but will show
 stacksexport pprof -b ./target/release-debug/stacks ./stacksexport/sql/pprof/offcpu_stacks_for_buildid.sql
 ```
 
-Offcpu events capture last stack traces before thread was switched off by scheduler,
+Offcpu events capture last stack trace before thread was switched off by scheduler,
 in this profile program waits for ring buffer events in epoll.
 
 ![Offcpu stacks](./_assets/offcpu_stacks.png)
