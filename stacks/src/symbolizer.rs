@@ -87,7 +87,7 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
 
     for (tgid, addrs) in unique {
         let req = addrs.into_iter().collect::<Vec<_>>();
-        let symbols = match symbolizer.symbolize_process(tgid as u32, &req) {
+        let symbols = match symbolizer.symbolize_userspace(tgid as u32, &req) {
             Ok(syms) => syms,
             Err(err) => {
                 debug!("symbolizing process {}: {}", tgid, err);
@@ -147,15 +147,13 @@ fn to_symbols<'a>(
 }
 
 pub(crate) trait Symbolizer {
-    fn new() -> Self;
-
-    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
-
     fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes>;
 
     fn drop_symbolizer(&mut self, tgid: u32) -> Result<()>;
 
-    fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>>;
+    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
+
+    fn symbolize_userspace(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>>;
 }
 
 #[derive(Debug)]
@@ -170,27 +168,24 @@ pub(crate) struct BlazesymSymbolizer {
     // technically it is exactly same object as any other symbolizer, but it will not cache any userspace files for
     // symbolizations
     kernel_symbolizer: symbolize::Symbolizer,
-    // symbolizers for userspace data have to live until:
-    // - all processes that use referenced executable exited
-    // - last batch of frames are symbolized after last process that used them exited
-    // (if i drop symbolizer immediately data will be lost)
+    // symbolizers for userspace data have to live until last batch of frames from the process is symbolized
+    // symbolization is delayed as it is more efficient to batch request for the same symbols
+    // hence we cannot drop symbolizer immediately once process exits
     executable_symbolizers: HashMap<(PathBuf, u64), Rc<ExecutableSymbolizer>>,
     process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
 }
 
-impl Symbolizer for BlazesymSymbolizer {
-    fn new() -> Self {
+impl BlazesymSymbolizer {
+    pub(crate) fn new() -> Self {
         Self {
-            kernel_symbolizer: symbolize::Symbolizer::builder()
-                .enable_code_info(false)
-                .enable_inlined_fns(false)
-                .enable_auto_reload(false)
-                .build(),
+            kernel_symbolizer: symbolize::Symbolizer::new(),
             executable_symbolizers: HashMap::new(),
             process_symbolizers: HashMap::new(),
         }
     }
+}
 
+impl Symbolizer for BlazesymSymbolizer {
     fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
         let rst = self
             .kernel_symbolizer
@@ -256,7 +251,7 @@ impl Symbolizer for BlazesymSymbolizer {
         Ok(())
     }
 
-    fn symbolize_process(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
+    fn symbolize_userspace(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
         let symbolizer = match self.process_symbolizers.get(&tgid) {
             Some(symbolizer) => &symbolizer.symbolizer,
             None => {
