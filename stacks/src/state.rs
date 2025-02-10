@@ -1,21 +1,20 @@
 use std::{
     collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
-    fs::{self, File},
-    io::Write,
-    path::{Path, PathBuf},
-    time::SystemTime,
+    path::PathBuf,
 };
 
 use anyhow::{Context, Result};
 use bytes::Bytes;
+use crossbeam::channel::Sender;
 use plain::Plain;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     bpf::ProgramName,
-    parquet::{Compression, Event, EventKind, Group, GroupWriter},
+    parquet::{Compression, Event, EventKind, Group},
     stacks_types::{self, blk_io_event, net_io_event, vfs_io_event},
-    symbolizer::{symbolize, Frames, Symbolizer},
+    state_writer::GroupWriteRequest,
+    symbolizer::Symbolizer,
 };
 
 #[derive(Debug)]
@@ -55,11 +54,10 @@ struct SpanEnter {
     last_enter_ts: u64,
 }
 
-pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
+pub(crate) struct State<Sym: Symbolizer> {
     cfg: Config,
-    writer: Option<GroupWriter<File>>,
-    frames: Fr,
     symbolizer: Sym,
+    state_writer_sender: Sender<GroupWriteRequest>,
     // cleanup should occur after frames from last batch were collected
     symbolizer_tgid_cleanup: HashSet<u32>,
     tgid_process_info: HashMap<u32, ProcessInfo>,
@@ -78,23 +76,20 @@ pub(crate) struct State<Fr: Frames, Sym: Symbolizer> {
 const PENDING_FILE_PREFIX: &str = "PENDING";
 const FILE_PREFIX: &str = "STACKS";
 
-impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
-    pub(crate) fn new(cfg: Config, frames: Fr, symbolizer: Sym) -> Result<Self> {
+impl<Sym: Symbolizer> State<Sym> {
+    pub(crate) fn new(cfg: Config, symbolizer: Sym, state_writer_sender: Sender<GroupWriteRequest>) -> Result<Self> {
         let stats = Stats {
             rows_in_current_file: 0,
             total_rows: 0,
             current_file_index: 0,
             missing_stacks_counter: HashMap::new(),
         };
-        let f = create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?;
-        let writer = GroupWriter::with_compression(f, cfg.compression)?;
         let group = Group::new(cfg.rows_per_group);
         let page_size = page_size()?;
         Ok(State {
             cfg,
-            writer: Some(writer),
-            frames,
             symbolizer,
+            state_writer_sender,
             symbolizer_tgid_cleanup: HashSet::new(),
             tgid_process_info: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
@@ -440,8 +435,6 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
     }
 
     pub(crate) fn on_event(&mut self, event: Received) -> Result<()> {
-        // TODO i need to adjust stats based on response from on_event
-        // this is hotfix for ci
         match event {
             Received::ProcessExec(event) => {
                 let buildid = match self.symbolizer.init_symbolizer(event.tgid) {
@@ -482,8 +475,6 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
                         .and_modify(|e| *e += 1)
                         .or_insert(1);
                 }
-                self.stats.total_rows += 1;
-                self.stats.rows_in_current_file += 1;
             }
             Received::UdpRecv(_)
             | Received::UdpSend(_)
@@ -495,8 +486,6 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
             | Received::Rss(_)
             | Received::TraceExit(_)
             | Received::TraceClose(_) => {
-                self.stats.total_rows += 1;
-                self.stats.rows_in_current_file += 1;
             }
         }
 
@@ -505,41 +494,9 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
         }
         if self.group.is_full() {
             debug!("group is full, symbolizing and flushing");
-            symbolize(&self.symbolizer, &self.frames, &mut self.group);
-            self.writer
-                .as_mut()
-                .expect("writer must exist")
-                .write(self.group.for_writing())?;
-            for tgid in self.symbolizer_tgid_cleanup.drain() {
-                self.symbolizer.drop_symbolizer(tgid)?;
-            }
-        }
-
-        if self.stats.rows_in_current_file == self.cfg.rows_per_group * self.cfg.groups_per_file {
-            self.exit_current_file()?;
-            self.writer = Some(GroupWriter::with_compression(
-                create_file(&self.cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?,
-                self.cfg.compression,
-            )?);
-            self.stats.current_file_index += 1;
-            self.stats.rows_in_current_file = 0;
-        }
-        Ok(())
-    }
-
-    pub(crate) fn exit_current_file(&mut self) -> Result<()> {
-        if !self.stats.missing_stacks_counter.is_empty() {
-            info!("missing stacks due to errors: {:?}", self.stats.missing_stacks_counter);
-            self.stats.missing_stacks_counter.clear();
-        }
-        if let Some(writer) = self.writer.take() {
-            on_exit(writer, &mut self.group, &self.symbolizer, &self.frames).context("closing last file")?;
-            move_file_with_timestamp(
-                &self.cfg.directory,
-                PENDING_FILE_PREFIX,
-                FILE_PREFIX,
-                self.stats.current_file_index,
-            )?;
+            let old = std::mem::replace(&mut self.group, Group::new(self.cfg.rows_per_group));
+            let request = GroupWriteRequest::new(old, self.symbolizer_tgid_cleanup.drain().collect());
+            self.state_writer_sender.send(request).context("write request should never fail")?;
         }
         Ok(())
     }
@@ -552,38 +509,11 @@ impl<Fr: Frames, Sym: Symbolizer> State<Fr, Sym> {
     }
 }
 
-fn on_exit<W: Write + Send>(
-    mut stack_writer: GroupWriter<W>,
-    stack_group: &mut Group,
-    symbolizer: &impl Symbolizer,
-    stacks: &impl Frames,
-) -> Result<()> {
-    if !stack_group.is_empty() {
-        debug!("symbolizing remaining stacks and flushing group");
-        symbolize(symbolizer, stacks, stack_group);
-        stack_writer.write(stack_group.for_writing())?;
-    }
-    stack_writer.close()?;
-    Ok(())
-}
-
 fn page_size() -> Result<u64> {
     match unsafe { libc::sysconf(libc::_SC_PAGESIZE) } {
         -1 => anyhow::bail!("sysconf _SC_PAGESIZE failed"),
         x => Ok(x as u64),
     }
-}
-
-fn create_file(dir: &Path, prefix: &str) -> Result<File> {
-    Ok(File::create(dir.join(format!("{}.parquet", prefix)))?)
-}
-
-fn move_file_with_timestamp(dir: &Path, from_prefix: &str, to_prefix: &str, index: usize) -> Result<()> {
-    let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
-    let from = dir.join(format!("{}.parquet", from_prefix));
-    let to = dir.join(format!("{}-{}-{}.parquet", to_prefix, index, now));
-    fs::rename(from, to)?;
-    Ok(())
 }
 
 unsafe impl Plain for stacks_types::switch_event {}

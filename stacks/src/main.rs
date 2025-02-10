@@ -40,6 +40,7 @@ mod bpf_profile;
 mod parquet;
 mod perf_event;
 mod state;
+mod state_writer;
 mod symbolizer;
 #[cfg(test)]
 mod tests;
@@ -211,18 +212,22 @@ fn main() -> Result<()> {
             .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
     let maps = skel.maps();
+    let frames = MapFrames(maps.stackmap());
+    let cfg = state::Config {
+        directory: opt.dir,
+        timestamp_adjustment: adjustment,
+        groups_per_file: opt.groups_per_file,
+        rows_per_group: opt.rows,
+        perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
+        compression: opt.compression,
+        _non_exhaustive: (),
+    };
+    let (sender, receiver) = crossbeam::channel::bounded(4);
+
     let mut program = state::State::new(
-        state::Config {
-            directory: opt.dir,
-            timestamp_adjustment: adjustment,
-            groups_per_file: opt.groups_per_file,
-            rows_per_group: opt.rows,
-            perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
-            compression: opt.compression,
-            _non_exhaustive: (),
-        },
-        MapFrames(maps.stackmap()),
+        cfg,
         BlazesymSymbolizer::new(),
+        sender,
     )?;
     for proc in procs.iter() {
         let fake_exec_event = stacks_types::process_exec_event {
@@ -277,7 +282,7 @@ fn main() -> Result<()> {
         }
     }
     info!("trace interrupted, flushing pending data to file and exiting");
-    program.exit_current_file()
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -289,8 +294,8 @@ enum ErrorConsume {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn consume_events<Fr: Frames, Sym: Symbolizer>(
-    state: &mut state::State<Fr, Sym>,
+fn consume_events(
+    state: &mut state::State<impl Symbolizer>,
     maps: &StacksMaps,
     profiler: Option<&mut RefCell<Profiler>>,
     progs: &StacksProgs,

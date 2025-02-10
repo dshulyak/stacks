@@ -74,13 +74,15 @@ struct TestSymbolizer {
     symbols: HashMap<u64, &'static str>,
 }
 
-impl Symbolizer for TestSymbolizer {
+impl TestSymbolizer {
     fn new() -> Self {
-        TestSymbolizer {
+        Self {
             symbols: SYMBOLS.clone(),
         }
     }
+}
 
+impl Symbolizer for TestSymbolizer {
     fn init_symbolizer(&mut self, _tgid: u32) -> Result<Bytes> {
         Ok(Bytes::default())
     }
@@ -108,7 +110,7 @@ impl Symbolizer for TestSymbolizer {
         Ok(rst)
     }
 
-    fn symbolize_process(&self, _tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
+    fn symbolize_userspace(&self, _tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
         self.symbolize_kernel(addr)
     }
 }
