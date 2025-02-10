@@ -73,9 +73,11 @@ fn default_path() -> PathBuf {
 }
 
 #[derive(Debug, Parser)]
+#[command(author, version, about)]
 struct Opt {
     #[clap(
         num_args = 1..,
+        required = true,
         help = "filter all threads of the process by the process command name. value in /proc/<pid>/comm"
     )]
     commands: Vec<String>,
@@ -144,9 +146,6 @@ additionally if file is not properly closed data will be lost."
         help = "output additional information about how much time is spent in bpf programs. it will be disabled if zero"
     )]
     profiling_interval: humantime::Duration,
-
-    #[clap(long, default_value = "false", help = "print version and exit")]
-    version: bool,
 }
 
 fn main() -> Result<()> {
@@ -178,13 +177,6 @@ fn main() -> Result<()> {
     bump_memlock_rlimit()?;
 
     let opt: Opt = Opt::parse();
-    if opt.version {
-        println!("stacks {}", env!("VERSION"));
-        return Ok(());
-    }
-    if opt.commands.is_empty() {
-        anyhow::bail!("at least one command must be provided");
-    }
     let programs = opt.programs.clone();
     info!(
         "running bpf programs: {} for commands {}",
