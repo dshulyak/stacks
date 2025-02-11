@@ -1,17 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
-    fs,
     iter::empty,
     num::NonZeroU32,
     path::PathBuf,
-    rc::Rc,
-    time::SystemTime,
+    sync::Arc,
 };
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use blazesym::{
-    helper::read_elf_build_id,
     symbolize::{self, Input, Kernel, Process, Source, Symbolized},
+    Pid,
 };
 use bytes::Bytes;
 use tracing::{debug, instrument, warn};
@@ -23,7 +21,7 @@ pub(crate) trait Frames {
 }
 
 #[instrument(skip_all)]
-pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stack_group: &mut Group) {
+pub(crate) fn symbolize(symbolizer: &BlazesymSymbolizer, stacks: &impl Frames, stack_group: &mut Group) {
     let mut resolved_addresses: HashMap<(i32, u64), ResolvedStack> = HashMap::new();
     let kstacks: HashSet<_> = stack_group.raw_kstacks().collect();
     let mut unique = HashSet::new();
@@ -87,7 +85,14 @@ pub(crate) fn symbolize(symbolizer: &impl Symbolizer, stacks: &impl Frames, stac
 
     for (tgid, addrs) in unique {
         let req = addrs.into_iter().collect::<Vec<_>>();
-        let symbols = match symbolizer.symbolize_userspace(tgid as u32, &req) {
+        let process_symbolizer = match symbolizer.symbolize_userspace(tgid as u32) {
+            Ok(sym) => sym,
+            Err(err) => {
+                debug!("symbolizing process {}: {}", tgid, err);
+                continue;
+            }
+        };
+        let symbols = match process_symbolizer.symbolize(&req) {
             Ok(syms) => syms,
             Err(err) => {
                 debug!("symbolizing process {}: {}", tgid, err);
@@ -146,21 +151,21 @@ fn to_symbols<'a>(
     })
 }
 
-pub(crate) trait Symbolizer {
-    fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes>;
-
-    fn drop_symbolizer(&mut self, tgid: u32) -> Result<()>;
-
-    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>>;
-
-    fn symbolize_userspace(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>>;
-}
-
 #[derive(Debug)]
-struct ExecutableSymbolizer {
+pub(crate) struct ExecutableSymbolizer {
     symbolizer: symbolize::Symbolizer,
+    source: Process,
     exe: PathBuf,
     mtime: u64,
+}
+
+impl ExecutableSymbolizer {
+    pub(crate) fn symbolize(&self, addr: &[u64]) -> Result<Vec<Symbolized<'_>>> {
+        let rst = self
+            .symbolizer
+            .symbolize(&Source::Process(self.source.clone()), Input::AbsAddr(addr))?;
+        Ok(rst)
+    }
 }
 
 pub(crate) struct BlazesymSymbolizer {
@@ -171,8 +176,8 @@ pub(crate) struct BlazesymSymbolizer {
     // symbolizers for userspace data have to live until last batch of frames from the process is symbolized
     // symbolization is delayed as it is more efficient to batch request for the same symbols
     // hence we cannot drop symbolizer immediately once process exits
-    executable_symbolizers: HashMap<(PathBuf, u64), Rc<ExecutableSymbolizer>>,
-    process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
+    executable_symbolizers: HashMap<(PathBuf, u64), Arc<ExecutableSymbolizer>>,
+    process_symbolizers: HashMap<u32, Arc<ExecutableSymbolizer>>,
 }
 
 impl BlazesymSymbolizer {
@@ -183,34 +188,32 @@ impl BlazesymSymbolizer {
             process_symbolizers: HashMap::new(),
         }
     }
-}
 
-impl Symbolizer for BlazesymSymbolizer {
-    fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
+    pub(crate) fn symbolize_kernel(&self, addr: &[u64]) -> Result<Vec<Symbolized>> {
         let rst = self
             .kernel_symbolizer
             .symbolize(&Source::Kernel(Kernel::default()), Input::AbsAddr(addr))?;
         Ok(rst)
     }
 
-    fn init_symbolizer(&mut self, tgid: u32) -> Result<Bytes> {
-        let (exe, mtime) =
-            exe_name_and_change_time(tgid).with_context(|| format!("reading exe name and mtime for tgid={}", tgid))?;
-        let buildid = read_elf_build_id(&exe)
-            .context("read buildid")?
-            .map(|buildid| Bytes::copy_from_slice(buildid.as_ref()))
-            .unwrap_or_default();
-
+    pub(crate) fn init_symbolizer(&mut self, tgid: u32, exe: PathBuf, mtime: u64, buildid: Bytes) -> Result<Bytes> {
         if let Some(symboliser) = self.executable_symbolizers.get(&(exe.clone(), mtime)) {
             self.process_symbolizers.insert(tgid, symboliser.clone());
         } else {
             let symbolizer = symbolize::Symbolizer::builder()
-                .enable_code_info(false)
-                .enable_inlined_fns(false)
+                .enable_code_info(true)
+                .enable_inlined_fns(true)
                 .enable_auto_reload(false)
                 .build();
-            let symboliser = Rc::new(ExecutableSymbolizer {
+            let symboliser = Arc::new(ExecutableSymbolizer {
                 symbolizer,
+                source: Process {
+                    pid: Pid::Pid(tgid.try_into()?),
+                    debug_syms: true,
+                    perf_map: true,
+                    map_files: true,
+                    _non_exhaustive: (),
+                },
                 exe: exe.clone(),
                 mtime,
             });
@@ -218,31 +221,33 @@ impl Symbolizer for BlazesymSymbolizer {
             self.executable_symbolizers.insert((exe, mtime), symboliser.clone());
             self.process_symbolizers.insert(tgid, symboliser);
         }
-        let symbolizer = self.process_symbolizers.get(&tgid).unwrap();
-        if let Err(err) = symbolizer.symbolizer.symbolize(
-            &Source::Process(Process {
-                pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
-                debug_syms: true,
-                perf_map: false,
-                map_files: false,
-                _non_exhaustive: (),
-            }),
-            Input::AbsAddr(&[]),
-        ) {
-            debug!("caching unsuccesful for tgid={} err={}", tgid, err);
+        if let Some(symbolizer) = self.process_symbolizers.get(&tgid) {
+            if let Err(err) = symbolizer.symbolizer.symbolize(
+                &Source::Process(Process {
+                    pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
+                    debug_syms: true,
+                    perf_map: false,
+                    map_files: false,
+                    _non_exhaustive: (),
+                }),
+                Input::AbsAddr(&[]),
+            ) {
+                debug!("caching unsuccesful for tgid={} err={}", tgid, err);
+            }
         }
+
         Ok(buildid)
     }
 
-    fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
+    pub(crate) fn drop_symbolizer(&mut self, tgid: u32) -> Result<()> {
         if let Some(symbolizer) = self.process_symbolizers.remove(&tgid) {
             debug!(
                 "dropping symbolized reference for tgid={}, counter {}",
                 tgid,
-                Rc::strong_count(&symbolizer)
+                Arc::strong_count(&symbolizer)
             );
             // last one was removed from process_symbolizers and one left in executable_symbolizers
-            if Rc::strong_count(&symbolizer) <= 2 {
+            if Arc::strong_count(&symbolizer) <= 2 {
                 debug!("symbolizer for exe={:?} dropped", symbolizer.exe);
                 self.executable_symbolizers
                     .remove(&(symbolizer.exe.clone(), symbolizer.mtime));
@@ -251,33 +256,15 @@ impl Symbolizer for BlazesymSymbolizer {
         Ok(())
     }
 
-    fn symbolize_userspace(&self, tgid: u32, addr: &[u64]) -> Result<Vec<Symbolized>> {
+    pub(crate) fn symbolize_userspace(&self, tgid: u32) -> Result<Arc<ExecutableSymbolizer>> {
         let symbolizer = match self.process_symbolizers.get(&tgid) {
-            Some(symbolizer) => &symbolizer.symbolizer,
+            Some(symbolizer) => symbolizer.clone(),
             None => {
                 // if process exits at the same time when batch is written we may lose several
                 // events that are emitted after receiving close event.
                 anyhow::bail!("missing symbolizer for tgid={}", tgid);
             }
         };
-        let rst = symbolizer.symbolize(
-            &Source::Process(Process {
-                pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
-                debug_syms: true,
-                perf_map: false,
-                map_files: false,
-                _non_exhaustive: (),
-            }),
-            Input::AbsAddr(addr),
-        )?;
-        Ok(rst)
+        Ok(symbolizer)
     }
-}
-
-fn exe_name_and_change_time(tgid: u32) -> Result<(PathBuf, u64)> {
-    let path = format!("/proc/{}/exe", tgid);
-    let exe = fs::read_link(path)?;
-    let meta = exe.metadata()?;
-    let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
-    Ok((exe, mtime))
 }
