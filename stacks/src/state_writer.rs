@@ -1,17 +1,18 @@
 use std::{
+    collections::HashSet,
     fs::{self, File},
-    path::Path,
+    path::{Path, PathBuf},
     time::SystemTime,
 };
 
 use anyhow::{Context, Result};
+use bytes::Bytes;
 use crossbeam::channel::Receiver;
 
 use crate::{
     parquet::{Group, GroupWriter},
-    state::Config,
     symbolizer::symbolize,
-    Frames, Symbolizer,
+    BlazesymSymbolizer, Compression, Frames,
 };
 
 // parquet file is invalid until footer is written.
@@ -20,51 +21,65 @@ use crate::{
 const PENDING_FILE_PREFIX: &str = "PENDING";
 const FILE_PREFIX: &str = "STACKS";
 
-pub(crate) struct GroupWriteRequest {
-    group: Group,
-    exited_tgids: Vec<u32>
+pub(crate) enum WriterRequest {
+    ProcessCreated(u32, PathBuf, u64, Bytes),
+    ProcessExited(u32),
+    Reset,
+    GroupFull(Group),
 }
 
-impl GroupWriteRequest {
-    pub fn new(group: Group, exited_tgids: Vec<u32>) -> Self {
-        Self { group, exited_tgids }
-    }
-}
-
-pub(crate) fn persist_groups(
-    cfg: Config,
+pub(crate) fn persist(
+    directory: PathBuf,
+    groups_per_file: usize,
+    compression: Compression,
     frames: impl Frames,
-    mut symbolizer: impl Symbolizer,
-    receiver: Receiver<GroupWriteRequest>,
+    receiver: Receiver<WriterRequest>,
 ) -> Result<()> {
+    let mut symbolizer = BlazesymSymbolizer::new();
     let mut writer = GroupWriter::with_compression(
-        create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?,
-        cfg.compression,
+        create_file(&directory, PENDING_FILE_PREFIX).context("creating pending file")?,
+        compression,
     )?;
     let mut groups_in_file = 0;
     let mut current_index = 0;
-    for mut group in receiver {
-        groups_in_file += 1;
-        symbolize(&symbolizer, &frames, &mut group.group);
-        for exited in group.exited_tgids {
-            symbolizer.drop_symbolizer(exited);
-        }
-        writer.write(group.group.for_writing())?;
-        if cfg.groups_per_file == groups_in_file {
-            move_file_with_timestamp(&cfg.directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
-            current_index += 1;
-            groups_in_file = 0;
-            writer.close()?;
-            writer = GroupWriter::with_compression(
-                create_file(&cfg.directory, PENDING_FILE_PREFIX).context("creating pending file")?,
-                cfg.compression,
-            )?;
+    // we are tracking which tgids exited since last time group was flushed
+    // after symbolizing tgids from this set we can drop symbolizers for them
+    let mut exited_tgids = HashSet::new();
+    for request in receiver {
+        match request {
+            WriterRequest::ProcessCreated(tgid, exe, mtime, buildid) => {
+                symbolizer.init_symbolizer(tgid, exe, mtime, buildid)?;
+            }
+            WriterRequest::ProcessExited(tid) => {
+                exited_tgids.insert(tid);
+            }
+            WriterRequest::Reset => {
+                symbolizer = BlazesymSymbolizer::new();
+            }
+            WriterRequest::GroupFull(mut group) => {
+                groups_in_file += 1;
+                symbolize(&symbolizer, &frames, &mut group);
+                for exited in exited_tgids.drain() {
+                    symbolizer.drop_symbolizer(exited)?;
+                }
+                writer.write(group.for_writing())?;
+                if groups_per_file == groups_in_file {
+                    move_file_with_timestamp(&directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
+                    current_index += 1;
+                    groups_in_file = 0;
+                    writer.close()?;
+                    writer = GroupWriter::with_compression(
+                        create_file(&directory, PENDING_FILE_PREFIX).context("creating pending file")?,
+                        compression,
+                    )?;
+                }
+            }
         }
     }
     // the last group is already written we just move it from pending to stable
     // but in case if it was actually last group for the file, there is nothing left to do
     if groups_in_file != 0 {
-        move_file_with_timestamp(&cfg.directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
+        move_file_with_timestamp(&directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
     }
     Ok(())
 }

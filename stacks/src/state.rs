@@ -1,9 +1,12 @@
 use std::{
-    collections::{btree_map, hash_map, BTreeMap, HashMap, HashSet},
+    collections::{btree_map, hash_map, BTreeMap, HashMap},
+    fs,
     path::PathBuf,
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result};
+use blazesym::helper::read_elf_build_id;
 use bytes::Bytes;
 use crossbeam::channel::Sender;
 use plain::Plain;
@@ -13,11 +16,10 @@ use crate::{
     bpf::ProgramName,
     parquet::{Compression, Event, EventKind, Group},
     stacks_types::{self, blk_io_event, net_io_event, vfs_io_event},
-    state_writer::GroupWriteRequest,
-    symbolizer::Symbolizer,
+    state_writer::WriterRequest,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Config {
     pub directory: PathBuf,
     pub timestamp_adjustment: u64,
@@ -31,9 +33,6 @@ pub(crate) struct Config {
 
 #[derive(Debug)]
 pub(crate) struct Stats {
-    pub rows_in_current_file: usize,
-    pub total_rows: usize,
-    pub current_file_index: usize,
     pub missing_stacks_counter: HashMap<i32, usize>,
 }
 
@@ -54,12 +53,9 @@ struct SpanEnter {
     last_enter_ts: u64,
 }
 
-pub(crate) struct State<Sym: Symbolizer> {
+pub(crate) struct State {
     cfg: Config,
-    symbolizer: Sym,
-    state_writer_sender: Sender<GroupWriteRequest>,
-    // cleanup should occur after frames from last batch were collected
-    symbolizer_tgid_cleanup: HashSet<u32>,
+    state_writer_sender: Sender<WriterRequest>,
     tgid_process_info: HashMap<u32, ProcessInfo>,
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
     // opened_spans contain pid -> span_id
@@ -70,27 +66,16 @@ pub(crate) struct State<Sym: Symbolizer> {
     stats: Stats,
 }
 
-// parquet file is invalid until footer is written.
-// writing to a file with different prefix allows to register only valid files without stopping the program.
-// also if program crashes it is much more desirable to avoid manual recovery by deleting unfinished file.
-const PENDING_FILE_PREFIX: &str = "PENDING";
-const FILE_PREFIX: &str = "STACKS";
-
-impl<Sym: Symbolizer> State<Sym> {
-    pub(crate) fn new(cfg: Config, symbolizer: Sym, state_writer_sender: Sender<GroupWriteRequest>) -> Result<Self> {
+impl State {
+    pub(crate) fn new(cfg: Config, state_writer_sender: Sender<WriterRequest>) -> Result<Self> {
         let stats = Stats {
-            rows_in_current_file: 0,
-            total_rows: 0,
-            current_file_index: 0,
             missing_stacks_counter: HashMap::new(),
         };
         let group = Group::new(cfg.rows_per_group);
         let page_size = page_size()?;
         Ok(State {
             cfg,
-            symbolizer,
             state_writer_sender,
-            symbolizer_tgid_cleanup: HashSet::new(),
             tgid_process_info: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
             opened_spans: HashMap::new(),
@@ -101,13 +86,10 @@ impl<Sym: Symbolizer> State<Sym> {
     }
 
     pub(crate) fn drop_known_state(&mut self) -> Result<()> {
-        for tgid in self.tgid_process_info.keys() {
-            self.symbolizer.drop_symbolizer(*tgid)?;
-        }
+        self.state_writer_sender.send(WriterRequest::Reset)?;
         self.tgid_process_info.clear();
         self.tgid_span_id_pid_to_enter.clear();
         self.opened_spans.clear();
-        self.symbolizer_tgid_cleanup.clear();
         Ok(())
     }
 
@@ -437,14 +419,9 @@ impl<Sym: Symbolizer> State<Sym> {
     pub(crate) fn on_event(&mut self, event: Received) -> Result<()> {
         match event {
             Received::ProcessExec(event) => {
-                let buildid = match self.symbolizer.init_symbolizer(event.tgid) {
-                    Ok(builid) => builid,
-                    Err(err) => {
-                        warn!("failed to init symbolizer for tgid {}: {:?}", event.tgid, err);
-                        Bytes::default()
-                    }
-                };
+                let (exe, mtime, buildid) = exe_change_time_build_id(event.tgid)?;
                 let comm = null_terminated(&event.comm);
+                self.state_writer_sender.send(WriterRequest::ProcessCreated(event.tgid, exe, mtime, buildid.clone()))?;
                 match self.tgid_process_info.entry(event.tgid) {
                     hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(ProcessInfo {
@@ -463,7 +440,7 @@ impl<Sym: Symbolizer> State<Sym> {
                 };
             }
             Received::ProcessExit(event) => {
-                self.symbolizer_tgid_cleanup.insert(event.tgid);
+                self.state_writer_sender.send(WriterRequest::ProcessExited(event.tgid))?;
             }
             Received::TraceEnter(_) => {}
             Received::Profile(event) => {
@@ -485,8 +462,7 @@ impl<Sym: Symbolizer> State<Sym> {
             | Received::Switch(_)
             | Received::Rss(_)
             | Received::TraceExit(_)
-            | Received::TraceClose(_) => {
-            }
+            | Received::TraceClose(_) => {}
         }
 
         if let Err(err) = self.save_event(event) {
@@ -495,10 +471,24 @@ impl<Sym: Symbolizer> State<Sym> {
         if self.group.is_full() {
             debug!("group is full, symbolizing and flushing");
             let old = std::mem::replace(&mut self.group, Group::new(self.cfg.rows_per_group));
-            let request = GroupWriteRequest::new(old, self.symbolizer_tgid_cleanup.drain().collect());
-            self.state_writer_sender.send(request).context("write request should never fail")?;
+            let request = WriterRequest::GroupFull(old);
+            self.state_writer_sender
+                .send(request)
+                .context("write request should never fail")?;
         }
         Ok(())
+    }
+
+    pub(crate) fn on_exit(&mut self) {
+        if self.group.is_empty() {
+            return;
+        }
+        let old = std::mem::replace(&mut self.group, Group::new(self.cfg.rows_per_group));
+        let request = WriterRequest::GroupFull(old);
+        self.state_writer_sender
+            .send(request)
+            .context("write request should never fail")
+            .unwrap();
     }
 
     fn get_last_open_span(&self, tgid: u32, pid: u32) -> Option<&SpanEnter> {
@@ -527,11 +517,6 @@ unsafe impl Plain for stacks_types::rss_stat_event {}
 unsafe impl Plain for stacks_types::blk_io_event {}
 unsafe impl Plain for stacks_types::vfs_io_event {}
 unsafe impl Plain for stacks_types::net_io_event {}
-
-#[cfg(test)]
-pub(crate) fn to_bytes<T: Plain>(event: &T) -> &[u8] {
-    unsafe { plain::as_bytes(event) }
-}
 
 fn to_event<T: Plain>(bytes: &[u8]) -> &T {
     plain::from_bytes(bytes).expect("failed to convert bytes to event")
@@ -638,4 +623,21 @@ pub(crate) fn null_terminated(bytes: &[u8]) -> &[u8] {
         Some(pos) => &bytes[..pos],
         None => bytes,
     }
+}
+
+fn exe_name_and_change_time(tgid: u32) -> Result<(PathBuf, u64)> {
+    let path = format!("/proc/{}/exe", tgid);
+    let exe = fs::read_link(path)?;
+    let meta = exe.metadata()?;
+    let mtime = meta.modified()?.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+    Ok((exe, mtime))
+}
+
+fn exe_change_time_build_id(tgid: u32) -> Result<(PathBuf, u64, Bytes)> {
+    let (exe, mtime) = exe_name_and_change_time(tgid)?;
+    let build_id = read_elf_build_id(&exe)
+        .context("read buildid")?
+        .map(|buildid| Bytes::copy_from_slice(buildid.as_ref()))
+        .unwrap_or_default();
+    Ok((exe, mtime, build_id))
 }

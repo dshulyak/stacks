@@ -31,7 +31,6 @@ bytes = "1.6.0"
 parquet = "52.0.0"
 thiserror = "1.0.62"
 crossbeam = { version = "0.8.4", features = ["crossbeam-channel"] }
-parking_lot = "0.12.3"
 
 [dev-dependencies]
 proptest = "1.4.0"

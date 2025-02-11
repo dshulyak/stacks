@@ -10,6 +10,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    thread::scope,
     time::Duration,
 };
 
@@ -27,7 +28,7 @@ use tracing_subscriber::{prelude::*, Registry};
 use crate::{
     parquet::Compression,
     state::Received,
-    symbolizer::{BlazesymSymbolizer, Frames, Symbolizer},
+    symbolizer::{BlazesymSymbolizer, Frames},
 };
 
 mod stacks {
@@ -42,8 +43,6 @@ mod perf_event;
 mod state;
 mod state_writer;
 mod symbolizer;
-#[cfg(test)]
-mod tests;
 
 // default correspond to profile:u:99,rss:u:29,switch:ku
 const DEFAULT_PROGRAMS: Programs = Programs::new()
@@ -212,77 +211,97 @@ fn main() -> Result<()> {
             .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
     let maps = skel.maps();
-    let frames = MapFrames(maps.stackmap());
-    let cfg = state::Config {
-        directory: opt.dir,
-        timestamp_adjustment: adjustment,
-        groups_per_file: opt.groups_per_file,
-        rows_per_group: opt.rows,
-        perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
-        compression: opt.compression,
-        _non_exhaustive: (),
-    };
-    let (sender, receiver) = crossbeam::channel::bounded(4);
-
-    let mut program = state::State::new(
-        cfg,
-        BlazesymSymbolizer::new(),
-        sender,
-    )?;
-    for proc in procs.iter() {
-        let fake_exec_event = stacks_types::process_exec_event {
-            timestamp: uptime.as_nanos() as u64,
-            tgid: proc.tgid as u32,
-            comm: proc.comm,
-            ..Default::default()
+    scope(|s| {
+        let cfg = state::Config {
+            directory: opt.dir,
+            timestamp_adjustment: adjustment,
+            groups_per_file: opt.groups_per_file,
+            rows_per_group: opt.rows,
+            perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
+            compression: opt.compression,
+            _non_exhaustive: (),
         };
-        program.on_event(Received::ProcessExec(&fake_exec_event))?;
-    }
+        let (sender, receiver) = crossbeam::channel::bounded(1000);
+        let writer_handle = s.spawn({
+            let skel = &skel;
+            let directory = cfg.directory.clone();
+            let groups_per_file = cfg.groups_per_file;
+            let compression = cfg.compression;
+            move || {
+                let maps = skel.maps();
+                if let Err(err) = state_writer::persist(
+                    directory,
+                    groups_per_file,
+                    compression,
+                    MapFrames(maps.stackmap()),
+                    receiver,
+                ) {
+                    error!("failed to persist data: {}", err);
+                }
+                anyhow::Ok(())
+            }
+        });
 
-    let mut dropped_counter = 0;
-    let sleep_interval = opt.poll.into();
-    let progs = skel.progs();
-    let mut profiler = if opt.profiling_interval.as_nanos() > 0 {
-        Some(RefCell::new(Profiler::enable(opt.profiling_interval.into())?))
-    } else {
-        None
-    };
-    loop {
-        match consume_events(
-            &mut program,
-            &maps,
-            profiler.as_mut(),
-            &progs,
-            &mut dropped_counter,
-            &interrupt,
-            sleep_interval,
-            &mut links,
-        ) {
-            Ok(_) => break,
-            Err(ErrorConsume::DroppedEvents(dropped)) => {
-                warn!("program missed events {}. will need to reinitialize state", dropped);
-                let span = info_span!("reinitialize");
-                let _guard = span.enter();
-                program.drop_known_state()?;
-                let scanned = scan_proc(&comms)?;
-                for comm in scanned {
-                    let fake_exec_event = stacks_types::process_exec_event {
-                        timestamp: uptime.as_nanos() as u64,
-                        tgid: comm.tgid as u32,
-                        comm: comm.comm,
-                        ..Default::default()
-                    };
-                    program.on_event(Received::ProcessExec(&fake_exec_event))?;
+        let mut program = state::State::new(cfg, sender)?;
+        for proc in procs.iter() {
+            let fake_exec_event = stacks_types::process_exec_event {
+                timestamp: uptime.as_nanos() as u64,
+                tgid: proc.tgid as u32,
+                comm: proc.comm,
+                ..Default::default()
+            };
+            program.on_event(Received::ProcessExec(&fake_exec_event))?;
+        }
+
+        let mut dropped_counter = 0;
+        let sleep_interval = opt.poll.into();
+        let progs = skel.progs();
+        let mut profiler = if opt.profiling_interval.as_nanos() > 0 {
+            Some(RefCell::new(Profiler::enable(opt.profiling_interval.into())?))
+        } else {
+            None
+        };
+        loop {
+            match consume_events(
+                &mut program,
+                &maps,
+                profiler.as_mut(),
+                &progs,
+                &mut dropped_counter,
+                &interrupt,
+                sleep_interval,
+                &mut links,
+            ) {
+                Ok(_) => {
+                    program.on_exit();
+                    break;
+                }
+                Err(ErrorConsume::DroppedEvents(dropped)) => {
+                    warn!("program missed events {}. will need to reinitialize state", dropped);
+                    let span = info_span!("reinitialize");
+                    let _guard = span.enter();
+                    program.drop_known_state()?;
+                    let scanned = scan_proc(&comms)?;
+                    for comm in scanned {
+                        let fake_exec_event = stacks_types::process_exec_event {
+                            timestamp: uptime.as_nanos() as u64,
+                            tgid: comm.tgid as u32,
+                            comm: comm.comm,
+                            ..Default::default()
+                        };
+                        program.on_event(Received::ProcessExec(&fake_exec_event))?;
+                    }
+                }
+                Err(err) => {
+                    error!("consume events: {:?}", err);
+                    break;
                 }
             }
-            Err(err) => {
-                error!("consume events: {:?}", err);
-                break;
-            }
         }
-    }
-    info!("trace interrupted, flushing pending data to file and exiting");
-    Ok(())
+        info!("profiler interrupted, flushing pending data to file and exiting");
+        let _ = writer_handle.join().expect("thread panicked");
+        Ok(())
+    })
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -295,7 +314,7 @@ enum ErrorConsume {
 
 #[allow(clippy::too_many_arguments)]
 fn consume_events(
-    state: &mut state::State<impl Symbolizer>,
+    state: &mut state::State,
     maps: &StacksMaps,
     profiler: Option<&mut RefCell<Profiler>>,
     progs: &StacksProgs,

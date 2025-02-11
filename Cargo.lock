@@ -2949,7 +2949,6 @@ dependencies = [
  "libbpf-cargo",
  "libbpf-rs",
  "libc",
- "parking_lot",
  "parquet 52.2.0",
  "plain",
  "proptest",
