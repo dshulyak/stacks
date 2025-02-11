@@ -51,7 +51,7 @@ pub(crate) struct State {
     // opened_spans contain pid -> span_id
     // added on trace_enter, remove on trace_exit
     opened_spans: HashMap<u32, Vec<u64>>,
-    group: Group,
+    group: Box<Group>,
     page_size: u64,
     stats: Stats,
 }
@@ -66,12 +66,12 @@ impl State {
         let stats = Stats {
             missing_stacks_counter: HashMap::new(),
         };
-        let group = Group::new(rows_per_group);
+        let group = Box::new(Group::new(rows_per_group));
         let page_size = page_size()?;
         Ok(State {
-            timestamp_adjustment: timestamp_adjustment,
-            rows_per_group: rows_per_group,
-            perf_event_frequency: perf_event_frequency,
+            timestamp_adjustment,
+            rows_per_group,
+            perf_event_frequency,
             state_writer_sender,
             tgid_process_info: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
@@ -473,7 +473,7 @@ impl State {
         }
         if self.group.is_full() {
             debug!("group is full, symbolizing and flushing");
-            let old = std::mem::replace(&mut self.group, Group::new(self.rows_per_group));
+            let old = std::mem::replace(&mut self.group, Box::new(Group::new(self.rows_per_group)));
             let request = WriterRequest::GroupFull(old);
             self.state_writer_sender
                 .send(request)
@@ -486,7 +486,7 @@ impl State {
         if self.group.is_empty() {
             return;
         }
-        let old = std::mem::replace(&mut self.group, Group::new(self.rows_per_group));
+        let old = std::mem::replace(&mut self.group, Box::new(Group::new(self.rows_per_group)));
         let request = WriterRequest::GroupFull(old);
         self.state_writer_sender
             .send(request)

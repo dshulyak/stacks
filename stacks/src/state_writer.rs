@@ -25,7 +25,7 @@ pub(crate) enum WriterRequest {
     ProcessCreated(u32, PathBuf, u64, Bytes),
     ProcessExited(u32),
     Reset,
-    GroupFull(Group),
+    GroupFull(Box<Group>),
 }
 
 pub(crate) fn persist(

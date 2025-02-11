@@ -272,6 +272,7 @@ fn main() -> Result<()> {
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn consumer(
     timestamp_adjustment: u64,
     rows_per_group: usize,
@@ -298,7 +299,7 @@ fn consumer(
     }
 
     let mut profiler = if profiling_interval.as_nanos() > 0 {
-        Some(RefCell::new(Profiler::enable(profiling_interval.into())?))
+        Some(RefCell::new(Profiler::enable(profiling_interval)?))
     } else {
         None
     };

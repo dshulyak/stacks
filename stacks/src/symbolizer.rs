@@ -3,7 +3,7 @@ use std::{
     iter::empty,
     num::NonZeroU32,
     path::PathBuf,
-    sync::Arc,
+    rc::Rc,
 };
 
 use anyhow::Result;
@@ -176,8 +176,8 @@ pub(crate) struct BlazesymSymbolizer {
     // symbolizers for userspace data have to live until last batch of frames from the process is symbolized
     // symbolization is delayed as it is more efficient to batch request for the same symbols
     // hence we cannot drop symbolizer immediately once process exits
-    executable_symbolizers: HashMap<(PathBuf, u64), Arc<ExecutableSymbolizer>>,
-    process_symbolizers: HashMap<u32, Arc<ExecutableSymbolizer>>,
+    executable_symbolizers: HashMap<(PathBuf, u64), Rc<ExecutableSymbolizer>>,
+    process_symbolizers: HashMap<u32, Rc<ExecutableSymbolizer>>,
 }
 
 impl BlazesymSymbolizer {
@@ -205,7 +205,7 @@ impl BlazesymSymbolizer {
                 .enable_inlined_fns(true)
                 .enable_auto_reload(false)
                 .build();
-            let symboliser = Arc::new(ExecutableSymbolizer {
+            let symboliser = Rc::new(ExecutableSymbolizer {
                 symbolizer,
                 source: Process {
                     pid: Pid::Pid(tgid.try_into()?),
@@ -244,10 +244,10 @@ impl BlazesymSymbolizer {
             debug!(
                 "dropping symbolized reference for tgid={}, counter {}",
                 tgid,
-                Arc::strong_count(&symbolizer)
+                Rc::strong_count(&symbolizer)
             );
             // last one was removed from process_symbolizers and one left in executable_symbolizers
-            if Arc::strong_count(&symbolizer) <= 2 {
+            if Rc::strong_count(&symbolizer) <= 2 {
                 debug!("symbolizer for exe={:?} dropped", symbolizer.exe);
                 self.executable_symbolizers
                     .remove(&(symbolizer.exe.clone(), symbolizer.mtime));
@@ -256,7 +256,7 @@ impl BlazesymSymbolizer {
         Ok(())
     }
 
-    pub(crate) fn symbolize_userspace(&self, tgid: u32) -> Result<Arc<ExecutableSymbolizer>> {
+    pub(crate) fn symbolize_userspace(&self, tgid: u32) -> Result<Rc<ExecutableSymbolizer>> {
         let symbolizer = match self.process_symbolizers.get(&tgid) {
             Some(symbolizer) => symbolizer.clone(),
             None => {
