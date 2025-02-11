@@ -417,13 +417,14 @@ impl State {
         match event {
             Received::ProcessExec(event) => {
                 let (exe, mtime, buildid) = exe_change_time_build_id(event.tgid)?;
-                let comm = null_terminated(&event.comm);
+                debug!(executable = ?exe, tgid = event.tgid, "process started");
                 self.state_writer_sender.send(WriterRequest::ProcessCreated(
                     event.tgid,
                     exe,
                     mtime,
                     buildid.clone(),
                 ))?;
+                let comm = null_terminated(&event.comm);
                 match self.tgid_process_info.entry(event.tgid) {
                     hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(ProcessInfo {
