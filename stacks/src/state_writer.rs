@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use crossbeam::channel::Receiver;
+use tracing::info;
 
 use crate::{
     parquet::{Group, GroupWriter},
@@ -64,10 +65,10 @@ pub(crate) fn persist(
                 }
                 writer.write(group.for_writing())?;
                 if groups_per_file == groups_in_file {
+                    writer.close()?;
                     move_file_with_timestamp(&directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
                     current_index += 1;
                     groups_in_file = 0;
-                    writer.close()?;
                     writer = GroupWriter::with_compression(
                         create_file(&directory, PENDING_FILE_PREFIX).context("creating pending file")?,
                         compression,
@@ -76,9 +77,11 @@ pub(crate) fn persist(
             }
         }
     }
+    info!("closing writer. flushing remaining group and exiting");
     // the last group is already written we just move it from pending to stable
     // but in case if it was actually last group for the file, there is nothing left to do
     if groups_in_file != 0 {
+        writer.close()?;
         move_file_with_timestamp(&directory, PENDING_FILE_PREFIX, FILE_PREFIX, current_index)?;
     }
     Ok(())
