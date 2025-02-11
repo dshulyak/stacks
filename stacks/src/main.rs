@@ -21,7 +21,9 @@ use clap::{
     builder::{IntoResettable, Resettable, StyledStr},
     Parser,
 };
+use crossbeam::channel::Sender;
 use libbpf_rs::{Link, MapFlags, RingBufferBuilder};
+use state_writer::WriterRequest;
 use tracing::{error, info, info_span, level_filters::LevelFilter, warn};
 use tracing_subscriber::{prelude::*, Registry};
 
@@ -192,7 +194,7 @@ fn main() -> Result<()> {
         .context("current unix time")?;
     let adjustment = (current_unix - uptime).as_nanos() as u64;
 
-    let (mut skel, mut links) = link(&programs, opt.debug_bpf, opt.bpf_events, opt.bpf_stacks)?;
+    let (mut skel, links) = link(&programs, opt.debug_bpf, opt.bpf_events, opt.bpf_stacks)?;
 
     let zero: u8 = 0;
     for comm in opt.commands.iter() {
@@ -210,98 +212,138 @@ fn main() -> Result<()> {
         maps.filter_tgid()
             .update(&proc.tgid.to_ne_bytes(), &zero.to_ne_bytes(), MapFlags::ANY)?;
     }
-    let maps = skel.maps();
     scope(|s| {
-        let cfg = state::Config {
-            directory: opt.dir,
-            timestamp_adjustment: adjustment,
-            groups_per_file: opt.groups_per_file,
-            rows_per_group: opt.rows,
-            perf_event_frequency: 1_000_000_000 / programs.profile_frequency() as i64,
-            compression: opt.compression,
-            _non_exhaustive: (),
-        };
+        let (results_sender, results_receiver) = crossbeam::channel::bounded(2);
         let (sender, receiver) = crossbeam::channel::bounded(1000);
         let writer_handle = s.spawn({
             let skel = &skel;
-            let directory = cfg.directory.clone();
-            let groups_per_file = cfg.groups_per_file;
-            let compression = cfg.compression;
+            let directory = opt.dir.clone();
+            let groups_per_file = opt.groups_per_file;
+            let compression = opt.compression;
+            let results_sender = results_sender.clone();
             move || {
                 let maps = skel.maps();
-                if let Err(err) = state_writer::persist(
+                let rst = state_writer::persist(
                     directory,
                     groups_per_file,
                     compression,
                     MapFrames(maps.stackmap()),
                     receiver,
-                ) {
-                    error!("failed to persist data: {}", err);
-                }
-                anyhow::Ok(())
+                );
+                results_sender.send(rst).expect("failed to send result");
             }
         });
-
-        let mut program = state::State::new(cfg, sender)?;
-        for proc in procs.iter() {
-            let fake_exec_event = stacks_types::process_exec_event {
-                timestamp: uptime.as_nanos() as u64,
-                tgid: proc.tgid as u32,
-                comm: proc.comm,
-                ..Default::default()
-            };
-            program.on_event(Received::ProcessExec(&fake_exec_event))?;
-        }
-
-        let mut dropped_counter = 0;
-        let sleep_interval = opt.poll.into();
-        let progs = skel.progs();
-        let mut profiler = if opt.profiling_interval.as_nanos() > 0 {
-            Some(RefCell::new(Profiler::enable(opt.profiling_interval.into())?))
-        } else {
-            None
-        };
-        loop {
-            match consume_events(
-                &mut program,
-                &maps,
-                profiler.as_mut(),
-                &progs,
-                &mut dropped_counter,
-                &interrupt,
-                sleep_interval,
-                &mut links,
-            ) {
-                Ok(_) => {
-                    program.on_exit();
-                    break;
-                }
-                Err(ErrorConsume::DroppedEvents(dropped)) => {
-                    warn!("program missed events {}. will need to reinitialize state", dropped);
-                    let span = info_span!("reinitialize");
-                    let _guard = span.enter();
-                    program.drop_known_state()?;
-                    let scanned = scan_proc(&comms)?;
-                    for comm in scanned {
-                        let fake_exec_event = stacks_types::process_exec_event {
-                            timestamp: uptime.as_nanos() as u64,
-                            tgid: comm.tgid as u32,
-                            comm: comm.comm,
-                            ..Default::default()
-                        };
-                        program.on_event(Received::ProcessExec(&fake_exec_event))?;
-                    }
-                }
-                Err(err) => {
-                    error!("consume events: {:?}", err);
-                    break;
-                }
+        let consumer_handle = s.spawn({
+            let timestamp_adjustment = adjustment;
+            let rows_per_group = opt.rows;
+            let perf_frequency = 1_000_000_000 / programs.profile_frequency() as i64;
+            let interrupt = interrupt.clone();
+            let skel = &skel;
+            move || {
+                let rst = consumer(
+                    timestamp_adjustment,
+                    rows_per_group,
+                    perf_frequency,
+                    interrupt,
+                    sender,
+                    &procs,
+                    uptime,
+                    opt.poll.into(),
+                    opt.profiling_interval.into(),
+                    links,
+                    comms,
+                    skel,
+                );
+                results_sender.send(rst).expect("failed to send result");
+            }
+        });
+        for rst in results_receiver {
+            if let Err(err) = rst {
+                error!("{}", err);
+                interrupt.store(true, Ordering::SeqCst);
             }
         }
+        consumer_handle.join().expect("thread panicked");
+        writer_handle.join().expect("thread panicked");
+
         info!("profiler interrupted, flushing pending data to file and exiting");
-        let _ = writer_handle.join().expect("thread panicked");
+
         Ok(())
     })
+}
+
+fn consumer(
+    timestamp_adjustment: u64,
+    rows_per_group: usize,
+    perf_frequency: i64,
+    interrupt: Arc<AtomicBool>,
+    sender: Sender<WriterRequest>,
+    procs: &[Proc],
+    uptime: Duration,
+    sleep_interval: Duration,
+    profiling_interval: Duration,
+    mut links: Vec<Link>,
+    comms: HashSet<&str>,
+    skel: &StacksSkel<'_>,
+) -> Result<()> {
+    let mut program = state::State::new(timestamp_adjustment, rows_per_group, perf_frequency, sender)?;
+    for proc in procs.iter() {
+        let fake_exec_event = stacks_types::process_exec_event {
+            timestamp: uptime.as_nanos() as u64,
+            tgid: proc.tgid as u32,
+            comm: proc.comm,
+            ..Default::default()
+        };
+        program.on_event(Received::ProcessExec(&fake_exec_event))?;
+    }
+
+    let mut profiler = if profiling_interval.as_nanos() > 0 {
+        Some(RefCell::new(Profiler::enable(profiling_interval.into())?))
+    } else {
+        None
+    };
+
+    let mut dropped_counter = 0;
+    let progs = skel.progs();
+    let maps = skel.maps();
+    loop {
+        match consume_events(
+            &mut program,
+            &maps,
+            profiler.as_mut(),
+            &progs,
+            &mut dropped_counter,
+            &interrupt,
+            sleep_interval,
+            &mut links,
+        ) {
+            Ok(_) => {
+                program.on_exit();
+                break;
+            }
+            Err(ErrorConsume::DroppedEvents(dropped)) => {
+                warn!("program missed events {}. will need to reinitialize state", dropped);
+                let span = info_span!("reinitialize");
+                let _guard = span.enter();
+                program.drop_known_state()?;
+                let scanned = scan_proc(&comms)?;
+                for comm in scanned {
+                    let fake_exec_event = stacks_types::process_exec_event {
+                        timestamp: uptime.as_nanos() as u64,
+                        tgid: comm.tgid as u32,
+                        comm: comm.comm,
+                        ..Default::default()
+                    };
+                    program.on_event(Received::ProcessExec(&fake_exec_event))?;
+                }
+            }
+            Err(err) => {
+                error!("consume events: {:?}", err);
+                break;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(thiserror::Error, Debug)]
