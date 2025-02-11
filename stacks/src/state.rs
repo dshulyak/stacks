@@ -14,22 +14,10 @@ use tracing::{debug, warn};
 
 use crate::{
     bpf::ProgramName,
-    parquet::{Compression, Event, EventKind, Group},
+    parquet::{Event, EventKind, Group},
     stacks_types::{self, blk_io_event, net_io_event, vfs_io_event},
     state_writer::WriterRequest,
 };
-
-#[derive(Debug, Clone)]
-pub(crate) struct Config {
-    pub directory: PathBuf,
-    pub timestamp_adjustment: u64,
-    pub groups_per_file: usize,
-    pub rows_per_group: usize,
-    pub perf_event_frequency: i64,
-    pub compression: Compression,
-    #[doc(hidden)]
-    pub _non_exhaustive: (),
-}
 
 #[derive(Debug)]
 pub(crate) struct Stats {
@@ -54,7 +42,9 @@ struct SpanEnter {
 }
 
 pub(crate) struct State {
-    cfg: Config,
+    timestamp_adjustment: u64,
+    rows_per_group: usize,
+    perf_event_frequency: i64,
     state_writer_sender: Sender<WriterRequest>,
     tgid_process_info: HashMap<u32, ProcessInfo>,
     tgid_span_id_pid_to_enter: BTreeMap<(u32, u64, u32), SpanEnter>,
@@ -67,14 +57,21 @@ pub(crate) struct State {
 }
 
 impl State {
-    pub(crate) fn new(cfg: Config, state_writer_sender: Sender<WriterRequest>) -> Result<Self> {
+    pub(crate) fn new(
+        timestamp_adjustment: u64,
+        rows_per_group: usize,
+        perf_event_frequency: i64,
+        state_writer_sender: Sender<WriterRequest>,
+    ) -> Result<Self> {
         let stats = Stats {
             missing_stacks_counter: HashMap::new(),
         };
-        let group = Group::new(cfg.rows_per_group);
+        let group = Group::new(rows_per_group);
         let page_size = page_size()?;
         Ok(State {
-            cfg,
+            timestamp_adjustment: timestamp_adjustment,
+            rows_per_group: rows_per_group,
+            perf_event_frequency: perf_event_frequency,
             state_writer_sender,
             tgid_process_info: HashMap::new(),
             tgid_span_id_pid_to_enter: BTreeMap::new(),
@@ -109,7 +106,7 @@ impl State {
                 // such information might be useful to identify issues with async tasks.
                 let span = self.get_last_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
-                    ts: (event.end + self.cfg.timestamp_adjustment) as i64,
+                    ts: (event.end + self.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
                     duration: (event.end - event.start) as i64,
                     cpu: event.cpu_id as i32,
@@ -135,8 +132,8 @@ impl State {
                     };
                     let span = self.get_last_open_span(event.tgid, event.pid);
                     self.group.save_event(Event {
-                        ts: (event.timestamp + self.cfg.timestamp_adjustment) as i64,
-                        duration: self.cfg.perf_event_frequency,
+                        ts: (event.timestamp + self.timestamp_adjustment) as i64,
+                        duration: self.perf_event_frequency,
                         kind: EventKind::Profile,
                         cpu: event.cpu_id as i32,
                         tgid: event.tgid as i32,
@@ -161,7 +158,7 @@ impl State {
                 };
                 let span = self.get_last_open_span(event.tgid, event.pid);
                 self.group.save_event(Event {
-                    ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                    ts: (event.ts + self.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
                     tgid: event.tgid as i32,
                     pid: event.pid as i32,
@@ -230,7 +227,7 @@ impl State {
                     }
                 };
                 self.group.save_event(Event {
-                    ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                    ts: (event.ts + self.timestamp_adjustment) as i64,
                     duration: (event.ts - span.last_enter_ts) as i64,
                     kind: received.try_into()?,
                     cpu: event.cpu_id as i32,
@@ -269,7 +266,7 @@ impl State {
                     }
                     if let Some(process_info) = process_info {
                         self.group.save_event(Event {
-                            ts: (event.ts + self.cfg.timestamp_adjustment) as i64,
+                            ts: (event.ts + self.timestamp_adjustment) as i64,
                             duration: (event.ts - span.first_enter_ts) as i64,
                             kind: EventKind::TraceClose,
                             cpu: event.cpu_id as i32,
@@ -321,7 +318,7 @@ impl State {
                 };
                 let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
-                    ts: (end + self.cfg.timestamp_adjustment) as i64,
+                    ts: (end + self.timestamp_adjustment) as i64,
                     duration: (end - start) as i64,
                     kind: received.try_into()?,
                     tgid: *tgid as i32,
@@ -358,7 +355,7 @@ impl State {
                 };
                 let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
-                    ts: (*ts + self.cfg.timestamp_adjustment) as i64,
+                    ts: (*ts + self.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
                     tgid: *tgid as i32,
                     pid: *pid as i32,
@@ -396,7 +393,7 @@ impl State {
                 };
                 let span = self.get_last_open_span(*tgid, *pid);
                 self.group.save_event(Event {
-                    ts: (*ts + self.cfg.timestamp_adjustment) as i64,
+                    ts: (*ts + self.timestamp_adjustment) as i64,
                     kind: received.try_into()?,
                     tgid: *tgid as i32,
                     pid: *pid as i32,
@@ -421,7 +418,12 @@ impl State {
             Received::ProcessExec(event) => {
                 let (exe, mtime, buildid) = exe_change_time_build_id(event.tgid)?;
                 let comm = null_terminated(&event.comm);
-                self.state_writer_sender.send(WriterRequest::ProcessCreated(event.tgid, exe, mtime, buildid.clone()))?;
+                self.state_writer_sender.send(WriterRequest::ProcessCreated(
+                    event.tgid,
+                    exe,
+                    mtime,
+                    buildid.clone(),
+                ))?;
                 match self.tgid_process_info.entry(event.tgid) {
                     hash_map::Entry::Vacant(vacant) => {
                         vacant.insert(ProcessInfo {
@@ -440,7 +442,8 @@ impl State {
                 };
             }
             Received::ProcessExit(event) => {
-                self.state_writer_sender.send(WriterRequest::ProcessExited(event.tgid))?;
+                self.state_writer_sender
+                    .send(WriterRequest::ProcessExited(event.tgid))?;
             }
             Received::TraceEnter(_) => {}
             Received::Profile(event) => {
@@ -470,7 +473,7 @@ impl State {
         }
         if self.group.is_full() {
             debug!("group is full, symbolizing and flushing");
-            let old = std::mem::replace(&mut self.group, Group::new(self.cfg.rows_per_group));
+            let old = std::mem::replace(&mut self.group, Group::new(self.rows_per_group));
             let request = WriterRequest::GroupFull(old);
             self.state_writer_sender
                 .send(request)
@@ -483,7 +486,7 @@ impl State {
         if self.group.is_empty() {
             return;
         }
-        let old = std::mem::replace(&mut self.group, Group::new(self.cfg.rows_per_group));
+        let old = std::mem::replace(&mut self.group, Group::new(self.rows_per_group));
         let request = WriterRequest::GroupFull(old);
         self.state_writer_sender
             .send(request)
