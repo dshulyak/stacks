@@ -1,7 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
     iter::empty,
-    num::NonZeroU32,
     path::PathBuf,
     rc::Rc,
 };
@@ -88,14 +87,14 @@ pub(crate) fn symbolize(symbolizer: &BlazesymSymbolizer, stacks: &impl Frames, s
         let process_symbolizer = match symbolizer.symbolize_userspace(tgid as u32) {
             Ok(sym) => sym,
             Err(err) => {
-                debug!("symbolizing process {}: {}", tgid, err);
+                debug!("get userspace symbolizer {}: {}", tgid, err);
                 continue;
             }
         };
         let symbols = match process_symbolizer.symbolize(&req) {
             Ok(syms) => syms,
             Err(err) => {
-                debug!("symbolizing process {}: {}", tgid, err);
+                debug!("get symbols {}: {}", tgid, err);
                 continue;
             }
         };
@@ -210,28 +209,22 @@ impl BlazesymSymbolizer {
                 source: Process {
                     pid: Pid::Pid(tgid.try_into()?),
                     debug_syms: true,
-                    perf_map: true,
-                    map_files: true,
+                    perf_map: false,
+                    map_files: false,
                     _non_exhaustive: (),
                 },
                 exe: exe.clone(),
                 mtime,
             });
-            debug!("symbolizer for tgid={} with executable {:?} initialized", tgid, exe);
+            debug!(executable = ?exe, tgid, "symbolizer initialized");
             self.executable_symbolizers.insert((exe, mtime), symboliser.clone());
             self.process_symbolizers.insert(tgid, symboliser);
         }
         if let Some(symbolizer) = self.process_symbolizers.get(&tgid) {
-            if let Err(err) = symbolizer.symbolizer.symbolize(
-                &Source::Process(Process {
-                    pid: blazesym::Pid::Pid(NonZeroU32::new(tgid).unwrap()),
-                    debug_syms: true,
-                    perf_map: false,
-                    map_files: false,
-                    _non_exhaustive: (),
-                }),
-                Input::AbsAddr(&[]),
-            ) {
+            if let Err(err) = symbolizer
+                .symbolizer
+                .symbolize(&Source::Process(symbolizer.source.clone()), Input::AbsAddr(&[]))
+            {
                 debug!("caching unsuccesful for tgid={} err={}", tgid, err);
             }
         }
